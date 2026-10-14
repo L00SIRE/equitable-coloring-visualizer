@@ -87,8 +87,8 @@ const TOOLS = [
     name: 'Hajnal–Szemerédi (Equitable)',
     tag: 'Advanced',
     tagColor: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-    desc: 'Kierstead–Kostochka algorithm for equitable (Δ+1)-coloring, one edge insertion at a time. Lemma 2.1 auxiliary digraph rendered live.',
-    detail: 'Auxiliary digraph H(G,f) · BFS path to V⁻ · Equitability proof trace',
+    desc: 'Kierstead–Kostochka algorithm for equitable (Δ+1)-coloring, one vertex at a time. The auxiliary digraph H(G,f), Lemma 2.1 and the Case 1 / Case 2 recursion of Theorem 2.4 are rendered live.',
+    detail: 'Auxiliary digraph H(G,f) · Accessible classes A, B, A′ · Solo vertices & Lemma 2.3',
     app: 'Fair task distribution · Balanced scheduling · Load equalization',
   },
 ];
@@ -96,10 +96,11 @@ const TOOLS = [
 /* ─── H-S workflow steps ───────────────────────────────────────────────── */
 const HS_STEPS = [
   { dot: 'bg-slate-500', label: 'G₀ — Empty', body: 'Start from the empty graph with an arbitrary equitable coloring f₀. Color classes are balanced to size ⌊n/(r+1)⌋.' },
-  { dot: 'bg-cyan-400', label: 'Edge insertion', body: 'For each vertex vᵢ in order, add all edges from G that connect vᵢ to {v₀…vᵢ₋₁}. Active edge highlighted in cyan.' },
-  { dot: 'bg-red-400', label: 'Conflict detection', body: 'If vᵢ lands in the same color class as a neighbor, a conflict edge fires red. The coloring is now nearly-equitable (one class ±1).' },
-  { dot: 'bg-indigo-400', label: 'Active vertex', body: 'vᵢ is ringed in indigo. We search for a reachable color class V⁻ in the auxiliary digraph H(G, f) via BFS.' },
-  { dot: 'bg-emerald-400', label: 'Lemma 2.1 path', body: 'A movable vertex is shifted along the path V⁺→…→V⁻. Each class on the path gains/loses one vertex, restoring equitability.' },
+  { dot: 'bg-cyan-400', label: 'Edge insertion', body: 'For each vertex vᵢ in order, add all edges from G that connect vᵢ to {v₁…vᵢ₋₁}. New edges are highlighted; quiet stages can be merged into one step.' },
+  { dot: 'bg-red-400', label: 'Improper edge', body: 'If vᵢ shares a color with a neighbor, that improper edge turns red. vᵢ moves to a class with no neighbors, so the coloring is nearly equitable (V⁺ has s+1, V⁻ has s−1).' },
+  { dot: 'bg-indigo-400', label: 'Auxiliary digraph', body: 'H(G, f) has an arc V→W when some vertex of V could move to W. A is the set of classes that can reach V⁻.' },
+  { dot: 'bg-emerald-400', label: 'Lemma 2.1 path', body: 'If V⁺ ∈ A, a movable vertex is shifted along each arc of a path V⁺→…→V⁻, restoring equitability.' },
+  { dot: 'bg-amber-400', label: 'V⁺ blocked', body: 'Otherwise Lemma 2.3 finds a solo vertex z and its special neighbor y₁. G[B − y₁] is colored recursively, then Case 1 finishes with Lemma 2.1 or Case 2 grows A and repeats.' },
   { dot: 'bg-slate-300', label: 'Gᵢ — Equitable', body: 'fᵢ is now a valid equitable (r+1)-coloring of Gᵢ. Repeat until all vertices of G are processed.' },
 ];
 
@@ -193,7 +194,7 @@ export default function Home() {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-10">
             {[
               { dot: 'bg-cyan-400', ring: 'ring-cyan-400/30', label: 'Active edge', sub: 'currently being added' },
-              { dot: 'bg-red-400', ring: 'ring-red-400/30', label: 'Conflict edge', sub: 'monochromatic neighbor' },
+              { dot: 'bg-red-400', ring: 'ring-red-400/30', label: 'Improper edge', sub: 'both ends same color' },
               { dot: 'bg-indigo-400', ring: 'ring-indigo-400/30', label: 'Active vertex', sub: 'vᵢ being processed' },
               { dot: 'bg-emerald-400', ring: 'ring-emerald-400/30', label: 'Move target', sub: 'vertex being shifted' },
               { dot: 'bg-amber-400', ring: 'ring-amber-400/30', label: 'Lemma path', sub: 'V⁺ → … → V⁻' },

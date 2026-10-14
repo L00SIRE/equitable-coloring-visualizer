@@ -1,4 +1,11 @@
 import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
+import GraphCanvas from '../canvas/GraphCanvas';
+import useCanvasRemount from '../canvas/useCanvasRemount';
+import { createRandomGraph } from '../canvas/randomGraph';
+import { buildGraphPayload, downloadGraphJson } from '../canvas/graphIO';
+import { layoutPlanarAsPossible } from '../canvas/planarLayout';
+import GraphToolbar from '../Components/GraphToolbar';
+import { runHajnalSzemeredi } from '../algorithms/hajnalSzemeredi';
 
 /* ─────────────────── colour palette ─────────────────── */
 const PALETTE = [
@@ -12,294 +19,48 @@ const palette = (k) =>
     : Array.from({ length: k }, (_, i) =>
         `hsl(${Math.round((360 * i) / k)}, 65%, 52%)`
       );
-const CLASS_NAMES = ['Red', 'Blue', 'Green', 'Yellow', 'Purple', 'Orange', 'Cyan', 'Pink'];
+const CLASS_NAMES = [
+  'Red', 'Blue', 'Green', 'Yellow', 'Purple', 'Orange',
+  'Cyan', 'Pink', 'Teal', 'Rose', 'Lime', 'Indigo',
+];
+const className = (c) => CLASS_NAMES[c] ?? `C${c}`;
 
-/* ─────────────── pure H-S algorithm (Thm 3.2) ──────── */
-function computeHSSteps(nodesList, edgesList, r, k) {
-  const ids = nodesList.map((n) => n.id).sort((a, b) => a - b);
-  const n = ids.length;
-  const col = {};
-  ids.forEach((id) => { col[id] = id % k; });
-  const active = [];
-  const adjW = new Map();
-  ids.forEach((id) => adjW.set(id, new Set()));
-  const steps = [];
+const PAPER_URL = 'https://doi.org/10.1017/S0963548307008619';
 
-  /* helpers */
-  const hasNbr = (v, c) => { for (const u of adjW.get(v)) if (col[u] === c) return true; return false; };
-  const inClass = (c) => ids.filter((id) => col[id] === c);
-  const movable = (from, to) => { for (const v of inClass(from)) if (!hasNbr(v, to)) return v; return null; };
-  const sizes = () => { const s = Array(k).fill(0); ids.forEach((id) => s[col[id]]++); return s; };
+/* badge colour + label for every step type produced by the algorithm */
+const STEP_STYLE = {
+  init: ['bg-slate-500/20 text-slate-200', 'Start'],
+  stage: ['bg-emerald-500/15 text-emerald-300', 'Add edges'],
+  improper: ['bg-red-500/20 text-red-300', 'Improper edge'],
+  move: ['bg-amber-500/20 text-amber-300', 'Nearly equitable'],
+  aux: ['bg-purple-500/20 text-purple-300', 'Path in H'],
+  shift: ['bg-violet-500/20 text-violet-300', 'Lemma 2.1 shift'],
+  blocked: ['bg-orange-500/20 text-orange-300', 'V+ blocked'],
+  solo: ['bg-sky-500/20 text-sky-300', 'Lemma 2.3'],
+  case1: ['bg-teal-500/20 text-teal-300', 'Case 1'],
+  case2: ['bg-pink-500/20 text-pink-300', 'Case 2'],
+  done: ['bg-green-500/20 text-green-300', 'Done'],
+  error: ['bg-red-500/30 text-red-200', 'Error'],
+};
+const TAG_STYLE = {
+  'V+': 'bg-blue-500/25 text-blue-200',
+  'V−': 'bg-amber-500/25 text-amber-200',
+  A: 'bg-emerald-500/20 text-emerald-200',
+  B: 'bg-slate-600/60 text-slate-200',
+  'A′': 'bg-sky-500/25 text-sky-200',
+  U: 'bg-orange-500/25 text-orange-200',
+  W: 'bg-pink-500/25 text-pink-200',
+  X: 'bg-pink-500/25 text-pink-200',
+  Y: 'bg-pink-500/25 text-pink-200',
+};
+const ROLE_LABEL = { z: 'z', y1: 'y₁', y2: 'y₂' };
+const AUX_SIZE = 300;
 
-  const buildAux = () => {
-    const s = sizes();
-    let vP = 0, vM = 0;
-    for (let c = 1; c < k; c++) { if (s[c] > s[vP]) vP = c; if (s[c] < s[vM]) vM = c; }
-    const nd = [];
-    for (let c = 0; c < k; c++) nd.push({ id: c, size: s[c], type: c === vP ? 'large' : c === vM ? 'small' : 'normal' });
-    const ed = [];
-    for (let a = 0; a < k; a++) for (let b = 0; b < k; b++) if (a !== b && movable(a, b) !== null) ed.push({ from: a, to: b });
-    return { nodes: nd, edges: ed, path: [], vPlus: vP, vMinus: vM, sizes: s };
-  };
-
-  const bfsPath = (auxEdges, from, to) => {
-    if (from === to) return [from];
-    const aAdj = new Map();
-    for (let c = 0; c < k; c++) aAdj.set(c, []);
-    auxEdges.forEach((e) => aAdj.get(e.from).push(e.to));
-    const par = new Map();
-    const vis = new Set([from]);
-    const q = [from];
-    while (q.length) {
-      const cur = q.shift();
-      if (cur === to) { const p = [to]; let x = to; while (par.has(x)) { x = par.get(x); p.unshift(x); } return p; }
-      for (const nb of aAdj.get(cur) || []) if (!vis.has(nb)) { vis.add(nb); par.set(nb, cur); q.push(nb); }
-    }
-    return null;
-  };
-
-  const snap = (type, msg, hl = {}) => {
-    const aux = buildAux();
-    return {
-      type, message: msg,
-      coloring: { ...col },
-      edges: active.map((e) => ({ ...e })),
-      highlight: {
-        currentEdge: hl.currentEdge || null,
-        movedVertex: hl.movedVertex ?? null,
-        fromClass: hl.fromClass ?? null,
-        toClass: hl.toClass ?? null,
-        conflictEdge: hl.conflictEdge || null,
-        auxPath: hl.auxPath || [],
-        processingVertex: hl.processingVertex ?? null,
-      },
-      auxGraph: { ...aux, path: hl.auxPath || [] },
-    };
-  };
-
-  /* Restore equitability (Lemma 2.1 + Case 2 fallback).
-     Case 1 (Lemma 2.1): BFS in H(G,f) from V+ to V-; move one vertex per arc.
-     Case 2: when V+ is not accessible to V- in H, broaden the search:
-       (a) BFS from V+ to any class smaller than V+
-       (b) direct move from any oversized class to any undersized class
-       (c) two-hop chain: big → mid → small
-       (d) swap: exchange vertices between an oversized and undersized class */
-  const restoreEquitable = () => {
-    const target = Math.floor(n / k);
-    const extra = n % k;            /* first `extra` classes get target+1 */
-    let iter = 0;
-    while (iter++ < 300) {
-      const s = sizes();
-      const mx = Math.max(...s), mn = Math.min(...s);
-      if (mx - mn <= 1) { steps.push(snap('equitable', `Equitable restored. Class sizes: [${s.join(', ')}].`)); return; }
-
-      const aux = buildAux();
-      const path = bfsPath(aux.edges, aux.vPlus, aux.vMinus);
-
-      if (path) {
-        /* ── Case 1: Lemma 2.1 ── */
-        steps.push(snap('aux_path',
-          `Lemma 2.1: V+ = class ${aux.vPlus} (size ${s[aux.vPlus]}), V- = class ${aux.vMinus} (size ${s[aux.vMinus]}). Path in H: ${path.join(' \u2192 ')}.`,
-          { auxPath: path }));
-        for (let j = 0; j < path.length - 1; j++) {
-          const y = movable(path[j], path[j + 1]);
-          if (y === null) { steps.push(snap('error', `Lemma 2.1 error: no movable vertex ${path[j]}\u2192${path[j+1]}.`)); return; }
-          col[y] = path[j + 1];
-          steps.push(snap('lemma_move',
-            `Lemma 2.1: move vertex ${y} from class ${path[j]} \u2192 class ${path[j + 1]}.`,
-            { movedVertex: y, fromClass: path[j], toClass: path[j + 1], auxPath: path }));
-        }
-        continue;
-      }
-
-      /* ── Case 2: V+ not accessible to V- ── */
-      steps.push(snap('no_path',
-        `Case 2: V+ = class ${aux.vPlus} not accessible to V- = class ${aux.vMinus}. Broadened rebalancing.`));
-
-      let moved = false;
-
-      /* 2a: BFS from V+ to ANY class with size < s[V+].  Moving along
-         this path shrinks V+ even if V- is unreachable. */
-      if (!moved) {
-        for (let c = 0; c < k; c++) {
-          if (c === aux.vPlus || s[c] >= s[aux.vPlus]) continue;
-          const p2 = bfsPath(aux.edges, aux.vPlus, c);
-          if (p2) {
-            steps.push(snap('aux_path',
-              `Case 2a: path V+ \u2192 class ${c} (size ${s[c]}): ${p2.join(' \u2192 ')}.`,
-              { auxPath: p2 }));
-            for (let j = 0; j < p2.length - 1; j++) {
-              const y = movable(p2[j], p2[j + 1]);
-              if (y === null) break;
-              col[y] = p2[j + 1];
-              steps.push(snap('lemma_move',
-                `Case 2a: move vertex ${y} class ${p2[j]} \u2192 ${p2[j + 1]}.`,
-                { movedVertex: y, fromClass: p2[j], toClass: p2[j + 1], auxPath: p2 }));
-            }
-            moved = true;
-            break;
-          }
-        }
-      }
-
-      /* 2b: direct move from ANY oversized class to ANY undersized class */
-      if (!moved) {
-        const big = Array.from({ length: k }, (_, c) => c).filter(c => s[c] > target + (extra > 0 ? 1 : 0)).sort((a, b) => s[b] - s[a]);
-        const small = Array.from({ length: k }, (_, c) => c).filter(c => s[c] < target).sort((a, b) => s[a] - s[b]);
-        for (const from of big) {
-          for (const to of small) {
-            for (const v of inClass(from)) {
-              if (!hasNbr(v, to)) {
-                col[v] = to;
-                steps.push(snap('lemma_move',
-                  `Case 2b: move vertex ${v} class ${from} \u2192 ${to}.`,
-                  { movedVertex: v, fromClass: from, toClass: to }));
-                moved = true;
-                break;
-              }
-            }
-            if (moved) break;
-          }
-          if (moved) break;
-        }
-      }
-
-      /* 2c: two-hop chain: big → mid → small */
-      if (!moved) {
-        const big = Array.from({ length: k }, (_, c) => c).filter(c => s[c] > target + (extra > 0 ? 1 : 0)).sort((a, b) => s[b] - s[a]);
-        const small = Array.from({ length: k }, (_, c) => c).filter(c => s[c] < target).sort((a, b) => s[a] - s[b]);
-        for (const from of big) {
-          for (const v of inClass(from)) {
-            for (let mid = 0; mid < k; mid++) {
-              if (mid === from || hasNbr(v, mid)) continue;
-              col[v] = mid;
-              for (const to of small) {
-                const w = movable(mid, to);
-                if (w !== null && w !== v) {
-                  col[w] = to;
-                  steps.push(snap('lemma_move',
-                    `Case 2c chain: vertex ${v} class ${from}\u2192${mid}, vertex ${w} class ${mid}\u2192${to}.`,
-                    { movedVertex: v, fromClass: from, toClass: mid }));
-                  moved = true;
-                  break;
-                }
-              }
-              if (moved) break;
-              col[v] = from;
-            }
-            if (moved) break;
-          }
-          if (moved) break;
-        }
-      }
-
-      /* 2d: swap — exchange v (big class) and w (small class) if each
-         can safely take the other's color */
-      if (!moved) {
-        const big = Array.from({ length: k }, (_, c) => c).filter(c => s[c] > target + (extra > 0 ? 1 : 0));
-        const small = Array.from({ length: k }, (_, c) => c).filter(c => s[c] < target);
-        for (const bc of big) {
-          for (const sc of small) {
-            for (const v of inClass(bc)) {
-              if (hasNbr(v, sc)) continue;
-              for (const w of inClass(sc)) {
-                if (w === v || hasNbr(w, bc)) continue;
-                col[v] = sc; col[w] = bc;
-                steps.push(snap('lemma_move',
-                  `Case 2d swap: vertex ${v} class ${bc}\u2192${sc}, vertex ${w} class ${sc}\u2192${bc}.`,
-                  { movedVertex: v, fromClass: bc, toClass: sc }));
-                moved = true;
-                break;
-              }
-              if (moved) break;
-            }
-            if (moved) break;
-          }
-          if (moved) break;
-        }
-      }
-
-      /* 2e: last resort — fresh greedy equitable recoloring.
-         Since d(v) <= r < k, a proper k-coloring always exists.  We
-         recolor from scratch using DSatur-style greedy that targets the
-         smallest class first, guaranteeing near-equitable output.
-         Then the next while-loop iteration uses Lemma 2.1 if needed. */
-      if (!moved) {
-        steps.push(snap('no_path', `Case 2e: all move strategies failed. Applying fresh greedy equitable recoloring.`));
-        const order = [...ids].sort((a, b) => adjW.get(b).size - adjW.get(a).size);
-        const fresh = {};
-        const cc = Array(k).fill(0);
-        const cap = Math.ceil(n / k);
-        for (const v of order) {
-          const used = new Set();
-          for (const u of adjW.get(v)) if (fresh[u] !== undefined) used.add(fresh[u]);
-          let best = -1, bestSz = Infinity;
-          for (let c = 0; c < k; c++) {
-            if (used.has(c) || cc[c] >= cap) continue;
-            if (cc[c] < bestSz) { bestSz = cc[c]; best = c; }
-          }
-          if (best === -1) { for (let c = 0; c < k; c++) if (!used.has(c)) { best = c; break; } }
-          fresh[v] = best;
-          cc[best]++;
-        }
-        let changed = 0;
-        for (const v of ids) { if (col[v] !== fresh[v]) { col[v] = fresh[v]; changed++; } }
-        steps.push(snap('lemma_move',
-          `Greedy recolor: reassigned ${changed} vertices. Sizes: [${sizes().join(', ')}].`,
-          {}));
-        moved = true;
-      }
-    }
-    steps.push(snap('error', 'Equitability loop limit reached.'));
-  };
-
-  /* Theorem 3.2 main loop */
-  steps.push(snap('init', `G\u2080 is edgeless. Initial mod-${k} coloring assigns vertex v to class (v mod ${k}). r = ${r}, k = ${k}, n = ${n}.`));
-
-  for (let i = 1; i < n; i++) {
-    const vi = ids[i];
-    const prev = new Set(ids.slice(0, i));
-    const newE = edgesList.filter((e) => (e.a === vi && prev.has(e.b)) || (e.b === vi && prev.has(e.a)));
-
-    if (newE.length === 0) { steps.push(snap('skip', `Process v\u2081\u2080 = vertex ${vi}. No new edges to add.`, { processingVertex: vi })); continue; }
-
-    steps.push(snap('process', `Process vertex ${vi}. Adding ${newE.length} edge(s): ${newE.map((e) => `{${e.a},${e.b}}`).join(', ')}.`, { processingVertex: vi }));
-
-    for (const e of newE) {
-      active.push({ a: Math.min(e.a, e.b), b: Math.max(e.a, e.b) });
-      adjW.get(e.a).add(e.b);
-      adjW.get(e.b).add(e.a);
-      steps.push(snap('add_edge', `Added edge {${e.a},${e.b}}.`, { currentEdge: e, processingVertex: vi }));
-    }
-
-    const viC = col[vi];
-    let conflict = null;
-    for (const nb of adjW.get(vi)) if (col[nb] === viC) { conflict = nb; break; }
-
-    if (conflict === null) {
-      steps.push(snap('ok', `Vertex ${vi} (class ${viC}) has no same-class neighbor. Coloring remains proper.`, { processingVertex: vi }));
-      continue;
-    }
-
-    steps.push(snap('conflict',
-      `CONFLICT: edge {${Math.min(vi, conflict)},${Math.max(vi, conflict)}} is monochromatic (both class ${viC}).`,
-      { conflictEdge: { a: Math.min(vi, conflict), b: Math.max(vi, conflict) }, processingVertex: vi }));
-
-    let tgt = -1;
-    for (let c = 0; c < k; c++) if (c !== viC && !hasNbr(vi, c)) { tgt = c; break; }
-    if (tgt === -1) { steps.push(snap('error', `Cannot resolve: vertex ${vi} has neighbours in every class.`)); continue; }
-
-    col[vi] = tgt;
-    steps.push(snap('move',
-      `Move vertex ${vi}: class ${viC} \u2192 class ${tgt}. Coloring is now nearly equitable.`,
-      { movedVertex: vi, fromClass: viC, toClass: tgt, processingVertex: vi }));
-
-    restoreEquitable();
-  }
-
-  steps.push(snap('done', `Algorithm complete. Equitable (r+1)-coloring found. r = ${r}, k = ${k}. Final sizes: [${sizes().join(', ')}].`));
-  return steps;
-}
+const STEP_DOT = {
+  init: 'bg-slate-400', stage: 'bg-emerald-400', improper: 'bg-red-400', move: 'bg-amber-400',
+  aux: 'bg-purple-400', shift: 'bg-violet-400', blocked: 'bg-orange-400', solo: 'bg-sky-400',
+  case1: 'bg-teal-400', case2: 'bg-pink-400', done: 'bg-green-400', error: 'bg-red-500',
+};
 
 /* ════════════════════════ COMPONENT ════════════════════════ */
 export default function HSAlgo() {
@@ -314,23 +75,28 @@ export default function HSAlgo() {
 
   const [dragId, setDragId] = useState(null);
   const [dragOff, setDragOff] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState(false);
-  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  const [zoomLabel, setZoomLabel] = useState(1);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
 
   const [hsSteps, setHsSteps] = useState([]);
   const [hsIdx, setHsIdx] = useState(-1);
   const [hsPlaying, setHsPlaying] = useState(false);
-  const [hsSpeed, setHsSpeed] = useState(1200);
+  const [hsSpeed, setHsSpeed] = useState(2500);
+  const [hsStats, setHsStats] = useState(null);
+  const [hsDummies, setHsDummies] = useState([]);
+  const [mergeQuiet, setMergeQuiet] = useState(true);
+  const [shortcuts, setShortcuts] = useState(true);
 
   const [bulkText, setBulkText] = useState('');
   const [nodeCount, setNodeCount] = useState('');
   const [toast, setToast] = useState('');
   const [builderOpen, setBuilderOpen] = useState(true);
+  const [explainOpen, setExplainOpen] = useState(true);
 
-  const svgRef = useRef(null);
+  const canvasRef = useRef(null);
+  const { canvasKey, remountCanvas } = useCanvasRemount();
   const W = 820, H = 520;
+  const NODE_R = 22;
 
   /* ─── derived ─── */
   const r = maxDeg;
@@ -361,16 +127,46 @@ export default function HSAlgo() {
     return Math.max(...classSizes) - Math.min(...classSizes) <= 1;
   }, [classSizes, nodes.length]);
 
-  const conflictCount = useMemo(() =>
-    edges.filter(({ a, b }) => coloring[a] != null && coloring[a] === coloring[b]).length,
-  [edges, coloring]);
-
   /* snapshot display */
   const curStep = hsIdx >= 0 && hsIdx < hsSteps.length ? hsSteps[hsIdx] : null;
   const dispEdges = curStep ? curStep.edges : edges;
   const dispColoring = curStep ? curStep.coloring : coloring;
   const hl = curStep?.highlight ?? {};
-  const auxG = curStep?.auxGraph ?? { nodes: [], edges: [], path: [] };
+  const aux = curStep?.aux ?? null;
+  const liftedSet = useMemo(() => new Set(curStep?.lifted ?? []), [curStep]);
+  const movedSet = useMemo(() => new Set((hl.moves ?? []).map((m) => m.v)), [hl.moves]);
+  const roleOf = useMemo(() => {
+    const m = new Map();
+    Object.entries(hl.roles ?? {}).forEach(([role, v]) => m.set(v, role));
+    return m;
+  }, [hl.roles]);
+
+  /* edges whose two ends currently share a colour */
+  const improperCount = useMemo(() =>
+    dispEdges.filter(({ a, b }) => dispColoring[a] != null && dispColoring[a] === dispColoring[b]).length,
+  [dispEdges, dispColoring]);
+
+  /* padding vertices (K_p) are drawn in the bottom-right corner while playing */
+  const dummyNodes = useMemo(() =>
+    (curStep ? hsDummies : []).map((id, j) => ({ id, label: `d${j + 1}`, x: W - 34 - j * 46, y: H - 66 })),
+  [curStep, hsDummies, W, H]);
+
+  /* role tags for each colour class in the current step */
+  const classTags = useMemo(() => {
+    const tags = Array.from({ length: k }, () => []);
+    if (!aux) return tags;
+    const add = (c, t) => { if (c != null && c < k) tags[c].push(t); };
+    add(aux.vPlus, 'V+');
+    add(aux.vMinus, 'V−');
+    if (aux.A) {
+      const A = new Set(aux.A);
+      aux.classes.forEach((c) => add(c, A.has(c) ? 'A' : 'B'));
+    }
+    (aux.Aprime ?? []).forEach((c) => add(c, 'A′'));
+    add(aux.U, 'U');
+    Object.entries(aux.focus ?? {}).forEach(([t, c]) => add(c, t));
+    return tags;
+  }, [aux, k]);
 
   /* keep coloring in sync with k / nodes */
   useEffect(() => {
@@ -387,6 +183,18 @@ export default function HSAlgo() {
       return changed ? next : prev;
     });
   }, [nodes, k]);
+
+  /* forget any computed run (graph or r changed) */
+  const resetSteps = useCallback(() => {
+    setHsSteps([]); setHsIdx(-1); setHsPlaying(false);
+    setHsStats(null); setHsDummies([]);
+  }, []);
+
+  const graphSig = useMemo(
+    () => `${nodes.map((n) => n.id).join(',')}|${edges.map((e) => `${e.a}-${e.b}`).join(',')}|${r}`,
+    [nodes, edges, r],
+  );
+  useEffect(() => { resetSteps(); }, [graphSig, resetSteps]);
 
   /* toast helper */
   const flash = useCallback((msg) => {
@@ -442,10 +250,98 @@ export default function HSAlgo() {
 
   const clearAll = () => {
     setNodes([]); setEdges([]); setColoring({});
-    setHsSteps([]); setHsIdx(-1); setHsPlaying(false);
+    resetSteps();
     setConnectMode(false); setConnectSrc(null);
-    setZoom(1); setPan({ x: 0, y: 0 });
+    setDragId(null);
+    setSelectedIds(new Set());
+    remountCanvas();
     flash('Cleared.');
+  };
+
+  const newRandomGraph = () => {
+    const n = 8 + Math.floor(Math.random() * 5); // 8–12
+    const g = createRandomGraph({
+      n,
+      maxDegree: r,
+      width: W,
+      height: H,
+      idStart: 0,
+      edgeCount: Math.round(n * Math.min(1.5, r * 0.55)),
+    });
+    resetSteps();
+    setConnectMode(false); setConnectSrc(null);
+    setDragId(null);
+    setSelectedIds(new Set());
+    remountCanvas();
+    setNodes(g.nodes);
+    setEdges(g.edges);
+    const c = {};
+    g.nodes.forEach((node) => { c[node.id] = node.id % k; });
+    setColoring(c);
+    flash(`New random graph: ${g.nodes.length} vertices, ${g.edges.length} edges (Δ ≤ r=${r}).`);
+  };
+
+  const downloadCurrentGraph = () => {
+    if (nodes.length === 0) { flash('Nothing to download — add vertices first.'); return; }
+    const payload = buildGraphPayload({
+      nodes,
+      edges,
+      width: W,
+      height: H,
+      page: 'hs-algo',
+      meta: { maxDeg: r, coloring },
+    });
+    downloadGraphJson(payload, `hs-graph-${nodes.length}v.json`);
+    flash('Downloaded graph JSON.');
+  };
+
+  const loadGraphFromFile = (graph, err) => {
+    if (err || !graph) {
+      flash(err?.message || 'Failed to load graph.');
+      return;
+    }
+    const rv = Number(graph.meta?.maxDeg);
+    if (Number.isFinite(rv) && rv >= 1) setMaxDeg(rv);
+    const nextR = Number.isFinite(rv) && rv >= 1 ? rv : r;
+    resetSteps();
+    setConnectMode(false); setConnectSrc(null);
+    setDragId(null);
+    setSelectedIds(new Set());
+    remountCanvas();
+    setNodes(graph.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })));
+    setEdges(graph.edges.map((e) => ({ a: e.a, b: e.b })));
+    const loadedColoring = graph.meta?.coloring;
+    if (loadedColoring && typeof loadedColoring === 'object') {
+      const c = {};
+      graph.nodes.forEach((n) => {
+        const v = loadedColoring[n.id] ?? loadedColoring[String(n.id)];
+        c[n.id] = v != null ? v : n.id % (nextR + 1);
+      });
+      setColoring(c);
+    } else {
+      const c = {};
+      graph.nodes.forEach((n) => { c[n.id] = n.id % (nextR + 1); });
+      setColoring(c);
+    }
+    flash(`Loaded graph: ${graph.nodes.length} vertices, ${graph.edges.length} edges.`);
+  };
+
+  const drawPlanarAsPossible = () => {
+    if (nodes.length < 2) { flash('Need at least 2 vertices to layout.'); return; }
+    const { nodes: next, crossingsBefore, crossingsAfter } = layoutPlanarAsPossible(nodes, edges, {
+      width: W,
+      height: H,
+    });
+    setNodes(next);
+    setSelectedIds(new Set());
+    remountCanvas();
+    flash(
+      crossingsAfter < crossingsBefore
+        ? `Layout updated: crossings ${crossingsBefore} → ${crossingsAfter}.`
+        : crossingsAfter === 0
+          ? 'Layout updated: drawing is crossing-free.'
+          : `Layout updated: still ${crossingsAfter} crossing(s) (may be non-planar).`,
+    );
   };
 
   const applyModColoring = () => {
@@ -517,15 +413,44 @@ export default function HSAlgo() {
     { a: 11, b: 15 }, { a: 14, b: 15 },
   ];
 
+  /* Sample Graph 2: quiet until the last stage; then V+ is blocked and, with
+     "shortest route" off, Lemma 2.3 lands in Case 2 with a recursive call. */
+  const SAMPLE2_NODES = [
+    { id: 0, x: 383, y: 460 }, { id: 1, x: 457, y: 331 }, { id: 2, x: 600, y: 80 },
+    { id: 3, x: 522, y: 349 }, { id: 4, x: 444, y: 428 }, { id: 5, x: 334, y: 389 },
+    { id: 6, x: 211, y: 303 }, { id: 7, x: 278, y: 387 }, { id: 8, x: 275, y: 191 },
+    { id: 9, x: 360, y: 125 }, { id: 10, x: 500, y: 154 }, { id: 11, x: 333, y: 241 },
+    { id: 12, x: 419, y: 239 }, { id: 13, x: 417, y: 146 }, { id: 14, x: 392, y: 326 },
+  ];
+  const SAMPLE2_EDGES = [
+    [0, 1], [1, 3], [0, 4], [3, 4], [1, 5], [4, 5], [5, 6], [0, 7], [5, 7], [6, 8],
+    [8, 9], [1, 10], [2, 10], [9, 10], [7, 11], [9, 11], [3, 12], [8, 12], [9, 13], [10, 13],
+    [11, 13], [12, 13], [4, 14], [11, 14], [12, 14],
+  ].map(([a, b]) => ({ a, b }));
+
+  const PRESETS = [
+    ['paper', 'Sample Graph 1 (paper, 16v, \u0394=3)'],
+    ['sample2', 'Sample Graph 2 (15v, \u0394=4, Case 2)'],
+    ['petersen', 'Petersen (10v, \u0394=3)'],
+    ['cycle8', 'Cycle C\u2088 (8v, \u0394=2)'],
+    ['k33', 'K\u2083,\u2083 (6v, \u0394=3)'],
+  ];
+
   const loadPreset = (name) => {
-    setHsSteps([]); setHsIdx(-1); setHsPlaying(false);
+    resetSteps();
     setConnectMode(false); setConnectSrc(null);
-    setZoom(1); setPan({ x: 0, y: 0 });
+    setDragId(null);
+    setSelectedIds(new Set());
+    remountCanvas();
     let ns, es, rv;
     if (name === 'paper') {
       ns = PAPER_NODES.map((n) => ({ ...n }));
       es = PAPER_EDGES.map((e) => ({ ...e }));
       rv = 3;
+    } else if (name === 'sample2') {
+      ns = SAMPLE2_NODES.map((n) => ({ ...n }));
+      es = SAMPLE2_EDGES.map((e) => ({ ...e }));
+      rv = 4;
     } else if (name === 'petersen') {
       rv = 3;
       const R1 = 200, R2 = 90, cx = W / 2, cy = H / 2;
@@ -563,18 +488,37 @@ export default function HSAlgo() {
     const c = {};
     ns.forEach((n) => { c[n.id] = n.id % (rv + 1); });
     setColoring(c);
-    flash(`Loaded: ${name === 'paper' ? 'Paper graph (16v, 22e, \u0394=3)' : name === 'petersen' ? 'Petersen graph (10v, 15e, \u0394=3)' : name === 'cycle8' ? 'Cycle C\u2088 (8v, 8e, \u0394=2)' : 'K\u2083,\u2083 (6v, 9e, \u0394=3)'}.`);
+    flash(`Loaded ${PRESETS.find(([id]) => id === name)[1]}: ${ns.length} vertices, ${es.length} edges.`);
   };
 
   /* ─── H-S playback ─── */
-  const onCompute = () => {
+  const onCompute = (opts = {}) => {
     if (nodes.length === 0) { flash('Add vertices first.'); return; }
     if (actualMaxDeg > r) { flash(`\u0394(G) = ${actualMaxDeg} exceeds r = ${r}. Increase r or remove edges.`); return; }
-    const steps = computeHSSteps(nodes, edges, r, k);
-    setHsSteps(steps);
-    setHsIdx(-1);
+    const res = runHajnalSzemeredi(nodes.map((n) => n.id), edges, r, {
+      compact: opts.mergeQuiet ?? mergeQuiet,
+      shortcuts: opts.shortcuts ?? shortcuts,
+      className,
+    });
+    setHsSteps(res.steps);
+    setHsStats(res.stats);
+    setHsDummies(res.dummyIds);
+    setHsIdx(0);
     setHsPlaying(false);
-    flash(`Computed ${steps.length} animation steps.`);
+    const last = res.steps[res.steps.length - 1];
+    flash(last.type === 'error' ? last.message : `Computed ${res.steps.length} steps.`);
+  };
+
+  /* changing an option re-runs the algorithm if a run is already loaded */
+  const toggleMergeQuiet = () => {
+    const next = !mergeQuiet;
+    setMergeQuiet(next);
+    if (hsSteps.length) onCompute({ mergeQuiet: next });
+  };
+  const toggleShortcuts = () => {
+    const next = !shortcuts;
+    setShortcuts(next);
+    if (hsSteps.length) onCompute({ shortcuts: next });
   };
 
   const hsForward = () => {
@@ -595,24 +539,63 @@ export default function HSAlgo() {
     return () => clearTimeout(t);
   }, [hsPlaying, hsIdx, hsSteps.length, hsSpeed]);
 
-  /* ─── SVG coord helpers ─── */
-  const getSvgPoint = useCallback((event) => {
-    const el = svgRef.current;
-    if (!el) return null;
-    const rect = el.getBoundingClientRect();
-    const source = event.touches && event.touches[0]
-      ? event.touches[0]
-      : (event.changedTouches && event.changedTouches[0]) || event;
-    const scaleX = W / rect.width;
-    const scaleY = H / rect.height;
-    const mx = (source.clientX - rect.left) * scaleX;
-    const my = (source.clientY - rect.top) * scaleY;
-    const cX = W / 2, cY = H / 2;
-    return {
-      x: ((mx - pan.x) - cX) / zoom + cX,
-      y: ((my - pan.y) - cY) / zoom + cY,
+  /* ← / → step through a computed run */
+  useEffect(() => {
+    if (hsSteps.length === 0) return undefined;
+    const onKey = (e) => {
+      if (e.target && /^(INPUT|TEXTAREA|SELECT)$/i.test(e.target.tagName)) return;
+      if (e.key === 'ArrowRight') { e.preventDefault(); setHsPlaying(false); setHsIdx((i) => Math.min(i + 1, hsSteps.length - 1)); }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); setHsPlaying(false); setHsIdx((i) => Math.max(i - 1, -1)); }
     };
-  }, [zoom, pan, W, H]);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [hsSteps.length]);
+
+  /* ─── selection ─── */
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  const deleteSelected = useCallback(() => {
+    setSelectedIds((sel) => {
+      if (sel.size === 0) return sel;
+      const doomed = sel;
+      setNodes((prev) => prev.filter((n) => !doomed.has(n.id)));
+      setEdges((prev) => prev.filter((e) => !doomed.has(e.a) && !doomed.has(e.b)));
+      setColoring((prev) => {
+        const next = { ...prev };
+        doomed.forEach((id) => { delete next[id]; });
+        return next;
+      });
+      resetSteps();
+      flash(`Deleted ${doomed.size} vertex${doomed.size === 1 ? '' : 'es'}.`);
+      return new Set();
+    });
+  }, [flash, resetSteps]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.target && /^(INPUT|TEXTAREA|SELECT)$/i.test(e.target.tagName)) return;
+      if (e.key === 'Escape') { clearSelection(); return; }
+      if ((e.key === 'Backspace' || e.key === 'Delete') && selectedIds.size > 0) {
+        e.preventDefault();
+        deleteSelected();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedIds, clearSelection, deleteSelected]);
+
+  const onMarqueeSelect = useCallback((rect) => {
+    if (connectMode) return;
+    const hit = new Set();
+    nodes.forEach((n) => {
+      if (n.x >= rect.x1 && n.x <= rect.x2 && n.y >= rect.y1 && n.y <= rect.y2) hit.add(n.id);
+    });
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      hit.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [nodes, connectMode]);
 
   /* ─── interaction ─── */
   const onNodeClick = useCallback((id) => {
@@ -623,102 +606,158 @@ export default function HSAlgo() {
     setConnectSrc(null);
   }, [connectMode, connectSrc, tryAddEdge]);
 
+  const dragIdRef = useRef(dragId);
+  const dragOffRef = useRef(dragOff);
+  const selectedIdsRef = useRef(selectedIds);
+  const nodeDragMetaRef = useRef(null); // { startClient, moved, originPositions }
+  dragIdRef.current = dragId;
+  dragOffRef.current = dragOff;
+  selectedIdsRef.current = selectedIds;
+
   const onMouseDownNode = (e, node) => {
-    e.preventDefault(); e.stopPropagation();
+    e.preventDefault();
+    e.stopPropagation();
     if (connectMode) { onNodeClick(node.id); return; }
-    const pt = getSvgPoint(e);
+
+    const shift = !!e.shiftKey;
+    if (shift) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(node.id)) next.delete(node.id);
+        else next.add(node.id);
+        return next;
+      });
+      return; // Shift+click toggles only; no drag
+    }
+
+    // Plain click: if node not in selection, select only it; else keep multi-selection for group drag
+    setSelectedIds((prev) => {
+      if (prev.has(node.id) && prev.size > 1) return prev;
+      return new Set([node.id]);
+    });
+
+    const pt = canvasRef.current?.getSvgPoint(e);
     if (!pt) return;
+    const src = e.touches?.[0] || e;
+    nodeDragMetaRef.current = {
+      startClient: { x: src.clientX, y: src.clientY },
+      moved: false,
+      primaryId: node.id,
+    };
     setDragId(node.id);
     setDragOff({ x: pt.x - node.x, y: pt.y - node.y });
   };
 
-  const onMouseMove = (e) => {
-    if (dragId !== null) {
-      if (e.touches) e.preventDefault();
-      const pt = getSvgPoint(e);
+  // Window-level node drag (moves whole selection when primary is selected).
+  useEffect(() => {
+    if (dragId === null) return undefined;
+
+    const onMove = (e) => {
+      if (e.cancelable && e.touches) e.preventDefault();
+      const pt = canvasRef.current?.getSvgPoint(e);
       if (!pt) return;
-      const nx = Math.max(20, Math.min(W - 20, pt.x - dragOff.x));
-      const ny = Math.max(20, Math.min(H - 20, pt.y - dragOff.y));
-      setNodes((prev) => prev.map((n) => (n.id === dragId ? { ...n, x: nx, y: ny } : n)));
-    } else if (isPanning) {
-      const src = e.touches && e.touches[0]
-        ? e.touches[0]
-        : (e.changedTouches && e.changedTouches[0]) || e;
-      setPan((p) => ({ x: p.x + src.clientX - panStart.x, y: p.y + src.clientY - panStart.y }));
-      setPanStart({ x: src.clientX, y: src.clientY });
-    }
-  };
+      const id = dragIdRef.current;
+      const off = dragOffRef.current;
+      if (id === null) return;
 
-  const onMouseUp = () => { setDragId(null); setIsPanning(false); };
+      const src = e.touches?.[0] || e;
+      const meta = nodeDragMetaRef.current;
+      if (meta && !meta.moved) {
+        const d = Math.hypot(src.clientX - meta.startClient.x, src.clientY - meta.startClient.y);
+        if (d < 5) return;
+        meta.moved = true;
+      }
 
-  const onSvgMouseDown = (e) => {
-    if (e.target.closest('g')) return;
-    const src = e.touches && e.touches[0]
-      ? e.touches[0]
-      : (e.changedTouches && e.changedTouches[0]) || e;
-    setIsPanning(true);
-    setPanStart({ x: src.clientX, y: src.clientY });
-  };
+      const nx = Math.max(NODE_R, Math.min(W - NODE_R, pt.x - off.x));
+      const ny = Math.max(NODE_R, Math.min(H - NODE_R, pt.y - off.y));
 
-  const onSvgDblClick = (e) => {
-    if (e.target.closest('g')) return;
-    const pt = getSvgPoint(e);
-    if (!pt) return;
-    addNodeAt(pt.x, pt.y);
-  };
+      setNodes((prev) => {
+        const primary = prev.find((n) => n.id === id);
+        if (!primary) return prev;
+        const dx = nx - primary.x;
+        const dy = ny - primary.y;
+        const sel = selectedIdsRef.current;
+        const moving = sel.has(id) && sel.size > 1 ? sel : new Set([id]);
+        return prev.map((n) => {
+          if (!moving.has(n.id)) return n;
+          if (n.id === id) return { ...n, x: nx, y: ny };
+          return {
+            ...n,
+            x: Math.max(NODE_R, Math.min(W - NODE_R, n.x + dx)),
+            y: Math.max(NODE_R, Math.min(H - NODE_R, n.y + dy)),
+          };
+        });
+      });
+    };
+    const onUp = () => {
+      nodeDragMetaRef.current = null;
+      setDragId(null);
+    };
 
-  const onWheel = (e) => {
-    if (e.target.closest('svg')) {
-      e.preventDefault();
-      setZoom((z) => Math.max(0.3, Math.min(4, z + (e.deltaY > 0 ? -0.1 : 0.1))));
-    }
-  };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+    window.addEventListener('touchcancel', onUp);
+
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+      window.removeEventListener('touchcancel', onUp);
+    };
+  }, [dragId, W, H, NODE_R]);
 
   /* ─── fill helper ─── */
   const getFill = (id) => {
     const c = dispColoring[id];
-    return c != null && c >= 0 && c < pal.length ? pal[c] : '#d1d5db';
+    return c != null && c >= 0 && c < pal.length ? pal[c] : '#334155';
   };
 
-  /* ─── aux graph layout ─── */
+  const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  const newEdgeSet = useMemo(
+    () => new Set((hl.newEdges ?? []).map((e) => `${e.a}-${e.b}`)),
+    [hl.newEdges],
+  );
+
+  /* ─── aux digraph layout: every colour class on a circle ─── */
+  const auxR = k > 8 ? 14 : 19;
   const auxLayout = useMemo(() => {
     const m = new Map();
-    const count = auxG.nodes.length;
-    if (count === 0) return m;
-    const R = 90, cx = 140, cy = 140;
-    auxG.nodes.forEach((n, i) => {
-      const a = (i / count) * 2 * Math.PI - Math.PI / 2;
-      m.set(n.id, { x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) });
-    });
+    const R = 100, c0 = AUX_SIZE / 2;
+    for (let c = 0; c < k; c++) {
+      const a = (c / k) * 2 * Math.PI - Math.PI / 2;
+      m.set(c, { x: c0 + R * Math.cos(a), y: c0 + R * Math.sin(a) });
+    }
     return m;
-  }, [auxG.nodes]);
+  }, [k]);
 
   const auxPathSet = useMemo(() => {
     const s = new Set();
-    for (let i = 0; i < auxG.path.length - 1; i++) s.add(`${auxG.path[i]}-${auxG.path[i + 1]}`);
+    const path = aux?.path ?? [];
+    for (let i = 0; i < path.length - 1; i++) s.add(`${path[i]}-${path[i + 1]}`);
     return s;
-  }, [auxG.path]);
+  }, [aux]);
 
-  /* ─── step type badge ─── */
   const stepBadge = (type) => {
-    const map = {
-      init: ['bg-slate-100 text-slate-700', 'INIT'],
-      process: ['bg-indigo-100 text-indigo-700', 'PROCESS'],
-      skip: ['bg-slate-100 text-slate-600', 'SKIP'],
-      add_edge: ['bg-emerald-100 text-emerald-700', 'EDGE'],
-      ok: ['bg-green-100 text-green-700', 'OK'],
-      conflict: ['bg-red-100 text-red-700', 'CONFLICT'],
-      move: ['bg-amber-100 text-amber-700', 'MOVE'],
-      aux_path: ['bg-purple-100 text-purple-700', 'LEMMA 2.1'],
-      lemma_move: ['bg-violet-100 text-violet-700', 'RECOLOR'],
-      equitable: ['bg-emerald-100 text-emerald-700', 'EQUITABLE'],
-      no_path: ['bg-orange-100 text-orange-700', 'CASE 2'],
-      done: ['bg-green-100 text-green-800', 'DONE'],
-      error: ['bg-red-100 text-red-700', 'ERROR'],
-    };
-    const [cls, label] = map[type] || ['bg-slate-100 text-slate-600', type];
-    return <span className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${cls}`}>{label}</span>;
+    const [cls, label] = STEP_STYLE[type] || ['bg-slate-500/20 text-slate-300', type];
+    return <span className={`inline-block shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${cls}`}>{label}</span>;
   };
+
+  const levelLabel = (depth) =>
+    depth === 0 ? 'Algorithm P' : depth === 1 ? 'Algorithm P′' : `P′ on G[B − y₁] · level ${depth - 1}`;
+
+  const runSummary = hsStats && [
+    `${hsStats.steps} steps`,
+    `${hsStats.improper} improper edge${hsStats.improper === 1 ? '' : 's'} fixed`,
+    `${hsStats.shifts} Lemma 2.1 shift${hsStats.shifts === 1 ? '' : 's'}`,
+    hsStats.case1 ? `Case 1 ×${hsStats.case1}` : null,
+    hsStats.case2 ? `Case 2 ×${hsStats.case2}` : null,
+    hsStats.maxDepth >= 2 ? `recursion depth ${hsStats.maxDepth - 1}` : null,
+  ].filter(Boolean).join(' · ');
+
+  const padNeeded = nodes.length % k === 0 ? 0 : k - (nodes.length % k);
 
   /* ════════════════════════ RENDER ════════════════════════ */
   return (
@@ -731,9 +770,18 @@ export default function HSAlgo() {
             <h1 className="text-2xl font-bold text-slate-100">
               Hajnal–Szemerédi Equitable Coloring
             </h1>
-            <p className="text-slate-400 text-sm mt-1">
-              Kierstead–Kostochka polynomial-time algorithm.
-              Every graph with &Delta;(G) &le; r admits an equitable (r+1)-coloring.
+            <p className="text-slate-400 text-sm mt-1 max-w-4xl">
+              Every graph with maximum degree &Delta;(G) &le; r has an <b className="text-slate-200">equitable</b> (r+1)-coloring:
+              a proper coloring whose color classes differ in size by at most one. This page runs the
+              polynomial-time algorithm from Kierstead &amp; Kostochka,{' '}
+              <a href={PAPER_URL} target="_blank" rel="noopener noreferrer"
+                className="text-indigo-300 underline decoration-indigo-500/50 hover:text-indigo-200">
+                A Short Proof of the Hajnal–Szemerédi Theorem on Equitable Colouring
+              </a>{' '}
+              (Combin. Probab. Comput. 17, 2008).
+            </p>
+            <p className="text-slate-500 text-xs mt-1">
+              &Delta;(G) is the maximum degree of G: the largest number of edges meeting at a single vertex.
             </p>
           </header>
 
@@ -746,41 +794,36 @@ export default function HSAlgo() {
 
           {/* ── stats ── */}
           <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
-            <span>V = {nodes.length}</span>
-            <span>E = {dispEdges.length}</span>
+            <span>|V| = {nodes.length}</span>
+            <span>|E| = {dispEdges.length}{curStep && dispEdges.length !== edges.length ? ` of ${edges.length}` : ''}</span>
             <span className={actualMaxDeg > r ? 'text-red-400' : ''}>
-              &Delta; = {actualMaxDeg}
+              &Delta;(G) = {actualMaxDeg}
             </span>
-            <span>r = {r}, k = {k} colors</span>
-            <span className={conflictCount > 0 ? 'text-red-400' : 'text-emerald-400'}>
-              {conflictCount > 0
-                ? `${conflictCount} conflict${conflictCount > 1 ? 's' : ''}`
-                : isEquitable && curStep === null ? 'Equitable'
-                : curStep ? `Step ${hsIdx + 1}/${hsSteps.length}`
-                : 'Proper'}
+            <span>r = {r}, k = r + 1 = {k} colors</span>
+            {curStep && <span className="text-indigo-300">Step {hsIdx + 1} / {hsSteps.length}</span>}
+            <span className={improperCount > 0 ? 'text-red-400' : 'text-emerald-400'}>
+              {improperCount > 0 ? `${improperCount} improper edge${improperCount > 1 ? 's' : ''}` : 'proper'}
             </span>
+            {!curStep && nodes.length > 0 && (
+              <span className={isEquitable ? 'text-emerald-400' : 'text-amber-400'}>
+                {isEquitable ? 'equitable' : 'not equitable'}
+              </span>
+            )}
           </div>
 
           {/* ── algorithm controls ── */}
           <section className="bg-slate-900 rounded-lg border border-slate-800 p-4 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-slate-300">
-                Algorithm (Kierstead–Kostochka, Theorem 3.2)
+                Algorithm P (Kierstead–Kostochka, Theorem 3.2)
               </h2>
-              <span className="text-xs text-slate-400">
-                {hsSteps.length > 0 && `${hsSteps.length} steps`}
-              </span>
+              {runSummary && <span className="text-xs text-slate-400">{runSummary}</span>}
             </div>
 
             {/* presets */}
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Load&nbsp;preset:</span>
-              {[
-                ['paper', 'Paper Graph (16v, 22e, \u0394=3)'],
-                ['petersen', 'Petersen (10v, \u0394=3)'],
-                ['cycle8', 'Cycle C\u2088 (8v, \u0394=2)'],
-                ['k33', 'K\u2083,\u2083 (6v, \u0394=3)'],
-              ].map(([id, label]) => (
+              {PRESETS.map(([id, label]) => (
                 <button key={id} onClick={() => loadPreset(id)}
                   className="text-xs bg-slate-800 hover:bg-indigo-900/40 text-slate-300 hover:text-indigo-300 font-medium px-3 py-1.5 rounded-lg transition-colors">
                   {label}
@@ -788,16 +831,23 @@ export default function HSAlgo() {
               ))}
             </div>
 
+            <GraphToolbar
+              onNewRandom={newRandomGraph}
+              onPlanarLayout={drawPlanarAsPossible}
+              onDownload={downloadCurrentGraph}
+              onLoad={loadGraphFromFile}
+            />
+
             {/* playback */}
             <div className="flex flex-wrap items-center gap-2">
-              <button onClick={onCompute}
+              <button onClick={() => onCompute()}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2 rounded-lg shadow-sm transition-colors">
-                Compute Steps
+                {hsSteps.length ? 'Recompute' : 'Compute Steps'}
               </button>
               <div className="h-6 w-px bg-slate-700" />
               {!hsPlaying ? (
                 <button onClick={hsRun} disabled={hsSteps.length === 0 || hsIdx + 1 >= hsSteps.length}
-                  className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-sm font-semibold px-3 py-2 rounded-lg shadow-sm transition-colors disabled:cursor-not-allowed">
+                  className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-700 disabled:text-slate-400 text-white text-sm font-semibold px-3 py-2 rounded-lg shadow-sm transition-colors disabled:cursor-not-allowed">
                   &#9654; Play
                 </button>
               ) : (
@@ -806,46 +856,127 @@ export default function HSAlgo() {
                   &#9646;&#9646; Pause
                 </button>
               )}
-              <button onClick={hsBack} disabled={hsIdx <= -1 || hsPlaying}
+              <button onClick={hsBack} disabled={hsIdx <= -1 || hsPlaying} title="Previous step (←)"
                 className="bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 text-slate-300 disabled:text-slate-500 text-sm font-medium px-2.5 py-2 rounded-lg transition-colors disabled:cursor-not-allowed">
                 &#9664;
               </button>
-              <button onClick={hsForward} disabled={hsIdx + 1 >= hsSteps.length || hsPlaying}
+              <button onClick={hsForward} disabled={hsIdx + 1 >= hsSteps.length || hsPlaying} title="Next step (→)"
                 className="bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 text-slate-300 disabled:text-slate-500 text-sm font-medium px-2.5 py-2 rounded-lg transition-colors disabled:cursor-not-allowed">
                 &#9654;
               </button>
-              <button onClick={hsJumpToEnd} disabled={hsSteps.length === 0 || hsPlaying}
+              <button onClick={hsJumpToEnd} disabled={hsSteps.length === 0 || hsPlaying} title="Last step"
                 className="bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 text-slate-300 disabled:text-slate-500 text-sm font-medium px-2.5 py-2 rounded-lg transition-colors disabled:cursor-not-allowed">
                 &#9654;&#9654;
               </button>
-              <button onClick={hsReset} disabled={hsSteps.length === 0}
+              <button onClick={hsReset} disabled={hsSteps.length === 0} title="Back to the graph you built"
                 className="bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 text-slate-300 disabled:text-slate-500 text-sm font-medium px-2.5 py-2 rounded-lg transition-colors disabled:cursor-not-allowed">
                 &#8635; Reset
               </button>
+              <div className="h-6 w-px bg-slate-700" />
+              <label className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none"
+                title="Fold consecutive stages that create no improper edge into a single step.">
+                <input type="checkbox" checked={mergeQuiet} onChange={toggleMergeQuiet} className="accent-indigo-500" />
+                Merge quiet stages
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none"
+                title="Among the choices Lemma 2.3 allows, take the one with the least work (Case 1, y₁ from V+, X = V−). Turn off to see Case 2 and the recursive call on G[B − y₁].">
+                <input type="checkbox" checked={shortcuts} onChange={toggleShortcuts} className="accent-indigo-500" />
+                Shortest route
+              </label>
               <div className="flex items-center gap-1.5 ml-auto">
                 <label className="text-xs text-slate-400">Speed</label>
-                <input type="range" min="200" max="3000" step="100" value={hsSpeed} onChange={(e) => setHsSpeed(Number(e.target.value))} className="w-24 accent-indigo-500" />
-                <span className="text-xs text-slate-400 w-12 text-right">{hsSpeed}ms</span>
+                <input type="range" min="500" max="6000" step="250" value={hsSpeed} onChange={(e) => setHsSpeed(Number(e.target.value))} className="w-24 accent-indigo-500" />
+                <span className="text-xs text-slate-400 w-14 text-right">{(hsSpeed / 1000).toFixed(2)}s</span>
               </div>
             </div>
 
             {/* progress */}
             {hsSteps.length > 0 && (
-              <div>
-                <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-300 ease-out"
-                    style={{ width: `${Math.max(0, ((hsIdx + 1) / hsSteps.length) * 100)}%` }} />
-                </div>
+              <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-300 ease-out"
+                  style={{ width: `${Math.max(0, ((hsIdx + 1) / hsSteps.length) * 100)}%` }} />
               </div>
             )}
 
             {/* step message */}
             {curStep && (
-              <div className="flex items-start gap-2 bg-slate-800 rounded-xl px-4 py-3 border border-slate-700">
-                {stepBadge(curStep.type)}
-                <span className="text-sm text-slate-300 leading-relaxed">{curStep.message}</span>
+              <div className="bg-slate-800 rounded-xl px-4 py-3 border border-slate-700 space-y-1.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  {stepBadge(curStep.type)}
+                  {curStep.ref && (
+                    <span className="text-[10px] font-mono text-slate-400 border border-slate-600 rounded px-1.5 py-0.5">{curStep.ref}</span>
+                  )}
+                  <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 ${curStep.depth >= 2 ? 'bg-sky-500/15 text-sky-300' : 'text-slate-500'}`}>
+                    {levelLabel(curStep.depth)}
+                  </span>
+                </div>
+                <p className="text-sm text-slate-200 leading-relaxed">{curStep.message}</p>
               </div>
             )}
+
+            {/* step timeline */}
+            {hsSteps.length > 0 && (
+              <div className="flex flex-wrap gap-1" aria-label="Steps">
+                {hsSteps.map((st, i) => (
+                  <button key={i} onClick={() => { setHsPlaying(false); setHsIdx(i); }}
+                    title={`${i + 1}. ${(STEP_STYLE[st.type] || ['', st.type])[1]} — ${levelLabel(st.depth)}`}
+                    className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md border transition-colors ${i === hsIdx
+                      ? 'border-indigo-400 bg-indigo-500/20 text-indigo-100'
+                      : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'} ${st.depth >= 2 ? 'border-dashed' : ''}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${STEP_DOT[st.type] || 'bg-slate-400'}`} />
+                    {i + 1}
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* ── colour classes banner ── */}
+          <section className="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+              <h3 className="text-sm font-bold text-slate-300">Color Classes</h3>
+              <span className="text-[11px] text-slate-400">
+                Equitable target: each class has {nodes.length > 0 ? <b>{Math.floor(nodes.length / k)}</b> : '?'}
+                {nodes.length % k > 0 && <> or <b>{Math.floor(nodes.length / k) + 1}</b></>} vertices.
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-2">
+              {pal.map((c, i) => {
+                const realCnt = nodes.reduce((acc, n) => acc + (dispColoring[n.id] === i ? 1 : 0), 0);
+                const padCnt = dummyNodes.reduce((acc, d) => acc + (dispColoring[d.id] === i ? 1 : 0), 0);
+                const outOfScope = aux && !aux.classes.includes(i);
+                return (
+                  <div key={i}
+                    className={`flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-1.5 transition-opacity ${outOfScope ? 'opacity-40' : ''}`}>
+                    <span className="w-4 h-4 rounded-full border border-black/20 shrink-0" style={{ background: c }} />
+                    <div className="min-w-0">
+                      <div className="text-xs text-slate-300">
+                        <b>{className(i)}</b> · {realCnt}
+                        {padCnt > 0 && <span className="text-slate-500"> + {padCnt} pad</span>}
+                      </div>
+                      {classTags[i].length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-0.5">
+                          {classTags[i].map((t) => (
+                            <span key={t} className={`text-[9px] font-bold px-1 rounded ${TAG_STYLE[t] || 'bg-slate-700 text-slate-200'}`}>{t}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              <button onClick={applyModColoring} className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded transition-colors">
+                Reset to mod-{k}
+              </button>
+              <button onClick={applyGreedyColoring} className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded transition-colors">
+                Greedy proper
+              </button>
+              <span className="text-[10px] text-slate-500 ml-1">
+                Tags: V+ / V− large and small class · A accessible · B the rest · A′ terminal family · U its cut class · W, X, Y classes used by Lemma 2.3.
+              </span>
+            </div>
           </section>
 
           {/* ── main content: graph + sidebar ── */}
@@ -860,200 +991,337 @@ export default function HSAlgo() {
                     className={`text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors ${connectMode ? 'bg-emerald-900/30 border-emerald-700 text-emerald-400' : 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700'}`}>
                     {connectMode ? 'Connect ON' : 'Connect Mode'}
                   </button>
-                  <span className="text-[10px] text-slate-400">Zoom {zoom.toFixed(1)}x</span>
+                  {selectedIds.size > 0 && (
+                    <>
+                      <span className="text-[10px] text-indigo-300">{selectedIds.size} selected</span>
+                      <button onClick={deleteSelected}
+                        className="text-xs font-medium px-2.5 py-1.5 rounded-lg border border-red-800/60 bg-red-950/40 text-red-300 hover:bg-red-900/50 transition-colors">
+                        Delete
+                      </button>
+                      <button onClick={clearSelection}
+                        className="text-xs font-medium px-2.5 py-1.5 rounded-lg border border-slate-600 bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors">
+                        Deselect
+                      </button>
+                    </>
+                  )}
+                  <span className="text-[10px] text-slate-400">Zoom {zoomLabel.toFixed(1)}x</span>
                 </div>
               </div>
 
-              <div className="relative overflow-hidden rounded-xl border border-slate-700 bg-slate-800">
-                <svg ref={svgRef} width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
-                  className="block touch-none select-none"
-                  style={{ transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`, transformOrigin: 'center', transition: dragId || isPanning ? 'none' : 'transform 0.15s ease-out', cursor: connectMode ? 'crosshair' : isPanning ? 'grabbing' : 'grab' }}
-                  onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
-                  onTouchMove={onMouseMove} onTouchEnd={onMouseUp} onTouchCancel={onMouseUp}
-                  onMouseDown={onSvgMouseDown} onTouchStart={onSvgMouseDown} onDoubleClick={onSvgDblClick} onWheel={onWheel}>
-
+              <GraphCanvas
+                ref={canvasRef}
+                canvasKey={canvasKey}
+                width={W}
+                height={H}
+                enableZoomPan
+                enableMarquee={!connectMode}
+                cursor={connectMode ? 'crosshair' : undefined}
+                tipLeft="Double-click empty space to add · Shift+click / Shift+drag to select"
+                tipRight="Scroll to zoom · Drag empty space to pan"
+                onBackgroundDoubleClick={(pt) => { if (!connectMode) addNodeAt(pt.x, pt.y); }}
+                onBackgroundClick={() => { if (!connectMode) clearSelection(); }}
+                onMarqueeSelect={onMarqueeSelect}
+                onZoomChange={setZoomLabel}
+              >
                   {/* edges */}
                   {dispEdges.map(({ a, b }) => {
-                    const na = nodes.find((n) => n.id === a);
-                    const nb = nodes.find((n) => n.id === b);
+                    const na = nodeById.get(a);
+                    const nb = nodeById.get(b);
                     if (!na || !nb) return null;
-                    const isCur = hl.currentEdge && ((hl.currentEdge.a === a && hl.currentEdge.b === b) || (hl.currentEdge.a === b && hl.currentEdge.b === a));
-                    const isConf = hl.conflictEdge && ((hl.conflictEdge.a === a && hl.conflictEdge.b === b) || (hl.conflictEdge.a === b && hl.conflictEdge.b === a));
+                    const isBad = hl.improperEdge && hl.improperEdge.a === Math.min(a, b) && hl.improperEdge.b === Math.max(a, b);
                     const isMono = dispColoring[a] != null && dispColoring[a] === dispColoring[b];
+                    const isNew = newEdgeSet.has(`${Math.min(a, b)}-${Math.max(a, b)}`);
+                    const touchesLifted = liftedSet.has(a) || liftedSet.has(b);
                     let stroke = '#cbd5e1'; let sw = 1.5;
-                    if (isConf) { stroke = '#ef4444'; sw = 4; }
-                    else if (isCur) { stroke = '#22c55e'; sw = 3.5; }
-                    else if (isMono && !curStep) { stroke = '#fca5a5'; sw = 2; }
-                    return <line key={`${a}-${b}`} x1={na.x} y1={na.y} x2={nb.x} y2={nb.y} stroke={stroke} strokeWidth={sw} style={{ transition: 'stroke 0.3s, stroke-width 0.3s' }} />;
+                    if (isBad) { stroke = '#ef4444'; sw = 4; }
+                    else if (isMono) { stroke = '#f87171'; sw = 2.5; }
+                    else if (isNew) { stroke = '#34d399'; sw = 3; }
+                    return (
+                      <line key={`${a}-${b}`} x1={na.x} y1={na.y} x2={nb.x} y2={nb.y}
+                        stroke={stroke} strokeWidth={sw}
+                        strokeDasharray={touchesLifted ? '5 4' : undefined}
+                        opacity={touchesLifted ? 0.55 : 1}
+                        style={{ transition: 'stroke 0.3s, stroke-width 0.3s' }} />
+                    );
                   })}
+
+                  {/* padding vertices K_p (only while a run is shown) */}
+                  {dummyNodes.length > 0 && (
+                    <g style={{ pointerEvents: 'none' }}>
+                      {dummyNodes.flatMap((d, i) => dummyNodes.slice(i + 1).map((e) => (
+                        <line key={`pad-${d.id}-${e.id}`} x1={d.x} y1={d.y} x2={e.x} y2={e.y}
+                          stroke="#64748b" strokeWidth={1.2} strokeDasharray="3 3" />
+                      )))}
+                      {dummyNodes.map((d) => (
+                        <g key={`pad-${d.id}`}>
+                          <circle cx={d.x} cy={d.y} r={15} fill={getFill(d.id)} fillOpacity={0.6}
+                            stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="3 2"
+                            style={{ transition: 'fill 0.4s ease' }} />
+                          <text x={d.x} y={d.y} textAnchor="middle" dy=".35em" fontSize={10} fontWeight="700" fill="#fff">{d.label}</text>
+                        </g>
+                      ))}
+                      <text x={W - 12} y={H - 90} textAnchor="end" fontSize={10} fill="#94a3b8">
+                        padding K{dummyNodes.length}
+                      </text>
+                    </g>
+                  )}
 
                   {/* connect-mode pending line */}
                   {connectMode && connectSrc !== null && (() => {
-                    const src = nodes.find((n) => n.id === connectSrc);
+                    const src = nodeById.get(connectSrc);
                     if (!src) return null;
                     return <circle cx={src.x} cy={src.y} r={28} fill="none" stroke="#22c55e" strokeWidth={2} strokeDasharray="4 3" className="animate-pulse-slow" />;
                   })()}
 
                   {/* nodes */}
                   {nodes.map((n) => {
-                    const isMoved = hl.movedVertex === n.id;
-                    const isProc = hl.processingVertex === n.id;
+                    const isMoved = movedSet.has(n.id);
+                    const isProc = hl.processing === n.id;
+                    const isLifted = liftedSet.has(n.id);
+                    const role = roleOf.get(n.id);
                     const isSrc = connectSrc === n.id;
+                    const isSel = selectedIds.has(n.id);
                     let ring = '#94a3b8', rw = 1.5;
                     if (isMoved) { ring = '#22c55e'; rw = 4; }
+                    else if (role) { ring = '#fbbf24'; rw = 3; }
                     else if (isProc) { ring = '#6366f1'; rw = 3; }
                     else if (isSrc) { ring = '#22c55e'; rw = 3; }
+                    else if (isSel) { ring = '#a5b4fc'; rw = 3; }
                     return (
-                      <g key={n.id} onMouseDown={(e) => onMouseDownNode(e, n)} onTouchStart={(e) => onMouseDownNode(e, n)}
+                      <g key={n.id} data-node="true"
+                        onMouseDown={(e) => onMouseDownNode(e, n)} onTouchStart={(e) => onMouseDownNode(e, n)}
                         style={{ cursor: connectMode ? 'pointer' : dragId === n.id ? 'grabbing' : 'grab', touchAction: 'none' }}>
                         {isMoved && <circle cx={n.x} cy={n.y} r={30} fill="none" stroke="#22c55e" strokeWidth={2} opacity={0.4} className="animate-pulse-slow" />}
-                        <circle cx={n.x} cy={n.y} r={22} fill={getFill(n.id)} stroke={ring} strokeWidth={rw}
+                        {isSel && !isMoved && (
+                          <circle cx={n.x} cy={n.y} r={NODE_R + 6} fill="none" stroke="#6366f1" strokeWidth={2} opacity={0.85} />
+                        )}
+                        <circle cx={n.x} cy={n.y} r={NODE_R} fill={isLifted ? '#0f172a' : getFill(n.id)} stroke={ring} strokeWidth={rw}
+                          strokeDasharray={isLifted ? '4 3' : undefined}
                           style={{ transition: 'fill 0.4s ease, stroke 0.3s, stroke-width 0.3s' }} />
                         <text x={n.x} y={n.y} textAnchor="middle" dy=".35em" fontSize={12} fontWeight="700"
-                          fill="#fff" style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                          fill={isLifted ? '#cbd5e1' : '#fff'} style={{ pointerEvents: 'none', userSelect: 'none' }}>
                           {n.id}
                         </text>
+                        {role && (
+                          <text x={n.x} y={n.y - NODE_R - 7} textAnchor="middle" fontSize={13} fontWeight="800"
+                            fill="#fbbf24" stroke="#0f172a" strokeWidth={3} paintOrder="stroke"
+                            style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                            {ROLE_LABEL[role] || role}
+                          </text>
+                        )}
+                        {isLifted && (
+                          <text x={n.x} y={n.y + NODE_R + 13} textAnchor="middle" fontSize={9}
+                            fill="#94a3b8" style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                            set aside
+                          </text>
+                        )}
                       </g>
                     );
                   })}
-                </svg>
-
-                {/* tip overlay */}
-                <div className="absolute bottom-2 left-2 right-2 flex justify-between text-[10px] text-slate-400 pointer-events-none">
-                  <span>Double-click to add vertex</span>
-                  <span>Scroll to zoom &middot; Drag to pan</span>
+              </GraphCanvas>
+              {curStep && (
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-400">
+                  <span className="flex items-center gap-1"><span className="w-4 h-0.5 bg-emerald-400 inline-block" /> edges added this step</span>
+                  <span className="flex items-center gap-1"><span className="w-4 h-1 bg-red-500 inline-block" /> improper edge</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full border-2 border-green-500 inline-block" /> moved vertex</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full border-2 border-amber-400 inline-block" /> z, y₁, y₂ (Lemma 2.3)</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full border border-dashed border-slate-400 inline-block" /> set aside / padding</span>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* ─ sidebar ─ */}
             <div className="space-y-4">
 
-              {/* color legend */}
-              <div className="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                <h3 className="text-sm font-bold text-slate-300 mb-3">Color Classes (mod-{k})</h3>
-                <div className="space-y-1.5">
-                  {pal.map((c, i) => {
-                    const cnt = curStep
-                      ? Object.values(curStep.coloring).filter((v) => v === i).length
-                      : classSizes[i];
-                    return (
-                      <div key={i} className="flex items-center gap-2">
-                        <span className="w-4 h-4 rounded-full border border-black/10 shrink-0" style={{ background: c }} />
-                        <span className="text-xs text-slate-400">
-                          <b>Class {i}</b>{CLASS_NAMES[i] ? ` (${CLASS_NAMES[i]})` : ''}: <b>{cnt}</b> vertices
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="mt-3 pt-2 border-t border-slate-700 text-[11px] text-slate-400">
-                  Equitable target: each class has {nodes.length > 0 ? <b>{Math.floor(nodes.length / k)}</b> : '?'}
-                  {nodes.length % k > 0 && <> or <b>{Math.floor(nodes.length / k) + 1}</b></>} vertices.
-                </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  <button onClick={applyModColoring} className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded transition-colors">
-                    Reset to mod-{k}
-                  </button>
-                  <button onClick={applyGreedyColoring} className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded transition-colors">
-                    Greedy proper
-                  </button>
-                </div>
-              </div>
-
               {/* auxiliary digraph H(G,f) */}
               <div className="bg-slate-900 rounded-2xl border border-slate-800 p-4">
                 <h3 className="text-sm font-bold text-slate-300 mb-1">Auxiliary Digraph H(G,&thinsp;f)</h3>
-                <p className="text-[10px] text-slate-400 mb-2">
-                  Arc V&rarr;W means some vertex in V has no neighbor in W (movable).
+                <p className="text-[11px] text-slate-400 mb-2 leading-relaxed">
+                  One node per color class (the number is its size). An arc V&rarr;W means some vertex of V has
+                  no neighbor in W, so it could move there. Classes that can reach V&minus; are <i>accessible</i>.
                 </p>
-                <svg viewBox="0 0 280 280" className="w-full h-auto">
+                <svg viewBox={`0 0 ${AUX_SIZE} ${AUX_SIZE}`} className="w-full h-auto">
                   <defs>
                     <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-                      <path d="M0 0L10 5L0 10z" fill="#94a3b8" />
+                      <path d="M0 0L10 5L0 10z" fill="#64748b" />
                     </marker>
                     <marker id="ahp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-                      <path d="M0 0L10 5L0 10z" fill="#7c3aed" />
+                      <path d="M0 0L10 5L0 10z" fill="#a78bfa" />
                     </marker>
                   </defs>
 
-                  {auxG.nodes.length === 0 && (
-                    <text x="140" y="140" textAnchor="middle" fontSize="12" fill="#94a3b8">
-                      Run algorithm to see H(G,f)
+                  {!aux && (
+                    <text x={AUX_SIZE / 2} y={AUX_SIZE / 2} textAnchor="middle" fontSize="12" fill="#94a3b8">
+                      Compute steps to see H(G,f)
                     </text>
                   )}
 
-                  {/* aux edges */}
-                  {auxG.edges.map((e) => {
+                  {/* arcs */}
+                  {aux && aux.arcs.map((e) => {
                     const p1 = auxLayout.get(e.from);
                     const p2 = auxLayout.get(e.to);
                     if (!p1 || !p2) return null;
                     const isP = auxPathSet.has(`${e.from}-${e.to}`);
                     const dx = p2.x - p1.x, dy = p2.y - p1.y;
                     const d = Math.hypot(dx, dy) || 1;
-                    const off = 24;
-                    /* offset perpendicular for bidirectional edges */
-                    const hasReverse = auxG.edges.some((r) => r.from === e.to && r.to === e.from);
-                    const perp = hasReverse ? 6 : 0;
-                    const nx = -dy / d * perp, ny = dx / d * perp;
+                    const off = auxR + 3;
+                    const hasReverse = aux.arcs.some((o) => o.from === e.to && o.to === e.from);
+                    const perp = hasReverse ? 4 : 0;
+                    const nx = (-dy / d) * perp, ny = (dx / d) * perp;
                     return (
                       <line key={`${e.from}-${e.to}`}
                         x1={p1.x + (dx / d) * off + nx} y1={p1.y + (dy / d) * off + ny}
                         x2={p2.x - (dx / d) * off + nx} y2={p2.y - (dy / d) * off + ny}
-                        stroke={isP ? '#7c3aed' : '#cbd5e1'} strokeWidth={isP ? 2.5 : 1}
+                        stroke={isP ? '#a78bfa' : '#475569'} strokeWidth={isP ? 2.5 : 1}
                         markerEnd={isP ? 'url(#ahp)' : 'url(#ah)'}
                         style={{ transition: 'stroke 0.3s' }} />
                     );
                   })}
 
-                  {/* aux nodes */}
-                  {auxG.nodes.map((n) => {
-                    const p = auxLayout.get(n.id);
-                    if (!p) return null;
-                    const isP = auxG.path.includes(n.id);
-                    const fill = pal[n.id] || '#d1d5db';
-                    let stroke = '#64748b', sw = 1;
-                    if (isP) { stroke = '#7c3aed'; sw = 3; }
-                    else if (n.type === 'large') { stroke = '#2563eb'; sw = 2.5; }
-                    else if (n.type === 'small') { stroke = '#d97706'; sw = 2.5; }
+                  {/* classes */}
+                  {aux && pal.map((fill, c) => {
+                    const p = auxLayout.get(c);
+                    const inScope = aux.classes.includes(c);
+                    const inA = aux.A?.includes(c);
+                    const onPath = aux.path.includes(c);
+                    let stroke = '#475569', sw = 1.5;
+                    if (c === aux.vPlus) { stroke = '#60a5fa'; sw = 3.5; }
+                    else if (c === aux.vMinus) { stroke = '#fbbf24'; sw = 3.5; }
+                    else if (onPath) { stroke = '#a78bfa'; sw = 3; }
+                    const tags = classTags[c].filter((t) => t !== 'A' && t !== 'B');
                     return (
-                      <g key={n.id}>
-                        <circle cx={p.x} cy={p.y} r={22} fill={fill} stroke={stroke} strokeWidth={sw}
-                          style={{ transition: 'fill 0.4s, stroke 0.3s' }} />
-                        <text x={p.x} y={p.y - 2} textAnchor="middle" dy=".3em" fontSize={11} fontWeight="700" fill="#fff"
+                      <g key={c} opacity={inScope ? 1 : 0.2} style={{ transition: 'opacity 0.3s' }}>
+                        {inA && <circle cx={p.x} cy={p.y} r={auxR + 6} fill="none" stroke="#34d399" strokeWidth={1.5} strokeDasharray="3 3" />}
+                        <circle cx={p.x} cy={p.y} r={auxR} fill={fill} stroke={stroke} strokeWidth={sw}
+                          style={{ transition: 'stroke 0.3s' }} />
+                        <text x={p.x} y={p.y} textAnchor="middle" dy=".35em" fontSize={11} fontWeight="700" fill="#fff"
                           style={{ pointerEvents: 'none' }}>
-                          V{n.id}
+                          {curStep?.sizes?.[c] ?? ''}
                         </text>
-                        <text x={p.x} y={p.y + 14} textAnchor="middle" fontSize={9} fill="#fff" opacity={0.8}
+                        <text x={p.x} y={p.y + auxR + 16} textAnchor="middle" fontSize={9} fill="#cbd5e1"
                           style={{ pointerEvents: 'none' }}>
-                          n={n.size}
+                          {className(c)}{tags.length ? ` · ${tags.join(' ')}` : ''}
                         </text>
                       </g>
                     );
                   })}
                 </svg>
-                {auxG.nodes.length > 0 && (
-                  <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-slate-400">
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500 inline-block" /> V+ (large)</span>
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> V- (small)</span>
-                    {auxG.path.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-600 inline-block" /> path</span>}
+                {aux && (
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-slate-400">
+                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full border-2 border-blue-400 inline-block" /> V+ (s+1)</span>
+                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full border-2 border-amber-400 inline-block" /> V− (s−1)</span>
+                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full border border-dashed border-emerald-400 inline-block" /> accessible (A)</span>
+                    <span className="flex items-center gap-1"><span className="w-4 h-0.5 bg-violet-400 inline-block" /> path</span>
+                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-slate-600 opacity-40 inline-block" /> outside sub-problem</span>
                   </div>
                 )}
               </div>
 
-              {/* max degree control */}
-              <div className="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                <h3 className="text-sm font-bold text-slate-300 mb-2">Parameters</h3>
+              {/* parameters */}
+              <div className="bg-slate-900 rounded-2xl border border-slate-800 p-4 space-y-2">
+                <h3 className="text-sm font-bold text-slate-300">Parameters</h3>
                 <label className="flex items-center gap-2 text-xs text-slate-400">
-                  Max degree r =
+                  r =
                   <input type="number" min={1} max={20} value={maxDeg}
                     onChange={(e) => setMaxDeg(Math.max(1, parseInt(e.target.value, 10) || 1))}
                     className="w-14 px-2 py-1 border border-slate-600 rounded-lg bg-slate-800 text-slate-200 text-center text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400" />
-                  <span className="text-slate-400">&rarr; k = {k} colors</span>
+                  <span className="text-slate-300">&rarr; k = r + 1 = <b>{k}</b> colors</span>
                 </label>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  The theorem needs &Delta;(G) &le; r. Right now &Delta;(G) = {actualMaxDeg}
+                  {actualMaxDeg > r
+                    ? <span className="text-red-400">, which is larger than r: raise r or remove edges.</span>
+                    : actualMaxDeg === r ? ', so r = Δ(G).' : `, so any r ≥ ${actualMaxDeg} works (the paper's r is Δ(G)).`}
+                </p>
+                {padNeeded > 0 && nodes.length > 0 && (
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    |V| = {nodes.length} is not a multiple of {k}, so the run adds {padNeeded} padding
+                    vertices forming K<sub>{padNeeded}</sub> (proof of Theorem 2.4). They show up in the
+                    bottom-right corner and are dropped at the end.
+                  </p>
+                )}
               </div>
             </div>
           </div>
+
+          {/* ── how the algorithm works ── */}
+          <section className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+            <button onClick={() => setExplainOpen((o) => !o)}
+              className="w-full flex items-center justify-between px-5 py-3 text-sm font-bold text-slate-300 hover:bg-slate-800 transition-colors">
+              <span>How the algorithm works</span>
+              <svg className={`w-4 h-4 text-slate-400 transition-transform ${explainOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            </button>
+            {explainOpen && (
+              <div className="px-5 pb-5 pt-4 border-t border-slate-700 grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-4 text-xs text-slate-400 leading-relaxed">
+                <div className="space-y-3">
+                  <h4 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Algorithm P (Theorem 3.2)</h4>
+                  <ol className="list-decimal pl-4 space-y-2">
+                    <li>
+                      Let k = r + 1 and s = n / k. If n is not a multiple of k, add p padding vertices that form a
+                      clique K<sub>p</sub>. They keep &Delta; &le; r and are removed at the end.
+                    </li>
+                    <li>
+                      Remove every edge and color v<sub>i</sub> with class (i − 1) mod k. With no edges this is
+                      proper, and every class has exactly s vertices.
+                    </li>
+                    <li>
+                      For i = 2, …, n, add back the edges from v<sub>i</sub> to v<sub>1</sub>, …, v<sub>i−1</sub>.
+                      Every new edge touches v<sub>i</sub>, so v<sub>i</sub> is the only vertex that can now sit next to a
+                      neighbor of the same color (an <b className="text-slate-300">improper edge</b>).
+                    </li>
+                    <li>
+                      If it does, move v<sub>i</sub> to a class where it has no neighbors. One exists: v<sub>i</sub> has at most r
+                      neighbors and one of them is in its own class. The coloring is now <b className="text-slate-300">nearly equitable</b>:
+                      one class V+ has s + 1 vertices, one class V− has s − 1. Hand it to P′.
+                    </li>
+                  </ol>
+                  <h4 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider pt-1">Lemma 2.1: the easy case</h4>
+                  <p>
+                    Build H(G, f) on the color classes and let A be the classes that can reach V−. If V+ is in A, take a path
+                    V+ = V<sub>1</sub> &rarr; … &rarr; V<sub>j</sub> = V− and move one movable vertex along every arc at the same time.
+                    V+ shrinks, V− grows, and the classes in between keep their size, so the coloring is equitable again.
+                  </p>
+                </div>
+                <div className="space-y-3">
+                  <h4 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Algorithm P′ when V+ is not accessible (Theorem 2.4)</h4>
+                  <ol className="list-decimal pl-4 space-y-2">
+                    <li>
+                      Let B be the classes outside A, m = |A| − 1 and q = r − m. No vertex of B can move into A, so each one has a
+                      neighbor in every class of A and at most q − 1 neighbors inside B (inequality 2.1). G[B] is a smaller
+                      instance of the same problem with q colors.
+                    </li>
+                    <li>
+                      Pick the class U whose removal cuts the fewest classes off from V−. Those classes form A′. Every class in A′ is
+                      <i> terminal</i>, and its vertices can only move inside A′ or into U.
+                    </li>
+                    <li>
+                      An edge zy with z &isin; W &isin; A′ and y &isin; B is <i>solo</i> if z is y&apos;s only neighbor in W. Lemma 2.3
+                      guarantees a solo vertex z that can either move to another class X of A, or has two non-adjacent special
+                      neighbors y<sub>1</sub>, y<sub>2</sub> in B.
+                    </li>
+                    <li>
+                      Set y<sub>1</sub> aside and make G[B − y<sub>1</sub>] equitable with its q colors by calling P′ on it. This is the
+                      recursive call; it is skipped when y<sub>1</sub> came from V+.
+                    </li>
+                    <li>
+                      <b className="text-slate-300">Case 1</b> (z can move to X): move z to X and y<sub>1</sub> into W. X is now the big class
+                      and is accessible inside A, so Lemma 2.1 finishes.
+                    </li>
+                    <li>
+                      <b className="text-slate-300">Case 2</b> (z cannot move inside A): move z into a class of B where it has no neighbor
+                      and y<sub>1</sub> into W. That class becomes the new V+, y<sub>2</sub> can now move into W, and A grows, so q
+                      strictly drops. Repeat. P′ needs at most r rounds, and the whole algorithm runs in O(n<sup>5</sup>).
+                    </li>
+                  </ol>
+                  <p className="text-slate-500">
+                    <b className="text-slate-400">Options.</b> <i>Merge quiet stages</i> folds stages without an improper edge into
+                    one step. <i>Shortest route</i> chooses, among the options Lemma 2.3 allows, the one with the least work. Turn it
+                    off to watch the recursive call and Case 2 (try Sample Graph 2).
+                  </p>
+                </div>
+              </div>
+            )}
+          </section>
 
           {/* ── graph builder ── */}
           <section className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
@@ -1108,10 +1376,10 @@ export default function HSAlgo() {
                 <div className="space-y-3">
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Quick Reference</h4>
                   <div className="text-xs text-slate-400 space-y-1.5 leading-relaxed">
-                    <p><b>Hajnal–Szemerédi Theorem:</b> Every graph with &Delta;(G)&nbsp;&le;&nbsp;r has an equitable (r+1)-coloring.</p>
-                    <p><b>Equitable:</b> class sizes differ by at most 1.</p>
+                    <p><b>Hajnal–Szemerédi Theorem:</b> every graph with &Delta;(G)&nbsp;&le;&nbsp;r has an equitable (r+1)-coloring.</p>
+                    <p><b>Equitable:</b> class sizes differ by at most 1. <b>Nearly equitable:</b> one class of s+1, one of s−1, the rest s.</p>
+                    <p><b>Improper edge:</b> an edge whose two ends have the same color.</p>
                     <p><b>Mod coloring:</b> vertex v &rarr; class (v&nbsp;mod&nbsp;k). For k=4: {'{'}0,4,8,12{'}'} are Red, {'{'}1,5,9,13{'}'} Blue, etc.</p>
-                    <p><b>Lemma 2.1:</b> If V+ is accessible to V- in H(G,f), move a vertex along each arc of the path.</p>
                   </div>
                 </div>
               </div>
