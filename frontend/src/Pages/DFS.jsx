@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, memo } from "react";
+import GraphToolbar from "../Components/GraphToolbar";
+import { createRandomGraph, edgesToFromTo } from "../canvas/randomGraph";
+import { buildGraphPayload, downloadGraphJson, toFromToEdges } from "../canvas/graphIO";
+import { layoutPlanarAsPossible } from "../canvas/planarLayout";
 
 const CANVAS_W = 800;
 const CANVAS_H = 500;
@@ -367,6 +371,61 @@ export default function DFS() {
     resetRun();
   };
 
+  const newRandomGraph = () => {
+    clearError();
+    const g = createRandomGraph({
+      n: 8 + Math.floor(Math.random() * 5),
+      edgeCount: 12,
+      width: CANVAS_W,
+      height: CANVAS_H,
+      idStart: 0,
+    });
+    setNodes(g.nodes);
+    setEdges(edgesToFromTo(g.edges).map(({ from, to }) => ({ from, to })));
+    setNextId(g.nodes.reduce((m, n) => Math.max(m, n.id), -1) + 1);
+    setStartId(g.nodes[0]?.id ?? 0);
+    resetRun();
+  };
+
+  const downloadCurrentGraph = () => {
+    clearError();
+    if (nodes.length === 0) return setError("Nothing to download.");
+    downloadGraphJson(
+      buildGraphPayload({
+        nodes,
+        edges,
+        width: CANVAS_W,
+        height: CANVAS_H,
+        page: "dfs",
+        meta: { startId, directed },
+      }),
+      "dfs-graph.json"
+    );
+  };
+
+  const loadGraphFromFile = (graph, err) => {
+    clearError();
+    if (err || !graph) return setError(err?.message || "Failed to load graph.");
+    setNodes(graph.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })));
+    setEdges(toFromToEdges(graph.edges));
+    setNextId(graph.nodes.reduce((m, n) => Math.max(m, Number(n.id) || 0), -1) + 1);
+    setStartId(graph.meta?.startId ?? graph.nodes[0]?.id ?? 0);
+    if (typeof graph.meta?.directed === "boolean") {
+      // directed is local state if exists — ignore if not controllable here
+    }
+    resetRun();
+  };
+
+  const drawPlanarAsPossible = () => {
+    clearError();
+    if (nodes.length < 2) return setError("Need at least 2 nodes to layout.");
+    const { nodes: next } = layoutPlanarAsPossible(nodes, edges, {
+      width: CANVAS_W,
+      height: CANVAS_H,
+    });
+    setNodes(next);
+  };
+
   const generateRandomEdges = () => {
     clearError();
     if (nodes.length < 2) return setError("Need at least 2 nodes.");
@@ -620,19 +679,27 @@ export default function DFS() {
                   </button>
                 </div>
 
-                <div className="border-t border-slate-700 pt-2 flex gap-2">
-                  <button
-                    onClick={generateRandomEdges}
-                    className="flex-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg py-1 text-sm"
-                  >
-                    Random Edges
-                  </button>
-                  <button
-                    onClick={clearAll}
-                    className="flex-1 bg-slate-600 hover:bg-slate-700 text-white rounded-lg py-1 text-sm"
-                  >
-                    Clear All
-                  </button>
+                <div className="border-t border-slate-700 pt-2 space-y-2">
+                  <GraphToolbar
+                    onNewRandom={newRandomGraph}
+                    onPlanarLayout={drawPlanarAsPossible}
+                    onDownload={downloadCurrentGraph}
+                    onLoad={loadGraphFromFile}
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={generateRandomEdges}
+                      className="flex-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg py-1 text-sm"
+                    >
+                      Random Edges
+                    </button>
+                    <button
+                      onClick={clearAll}
+                      className="flex-1 bg-slate-600 hover:bg-slate-700 text-white rounded-lg py-1 text-sm"
+                    >
+                      Clear All
+                    </button>
+                  </div>
                 </div>
               </div>
 

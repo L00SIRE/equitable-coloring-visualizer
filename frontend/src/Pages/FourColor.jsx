@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
+import GraphToolbar from '../Components/GraphToolbar';
+import { createRandomGraph } from '../canvas/randomGraph';
+import { buildGraphPayload, downloadGraphJson, toFromToEdges } from '../canvas/graphIO';
+import { layoutPlanarAsPossible } from '../canvas/planarLayout';
 
 const SVG_W = 800;
 const SVG_H = 500;
@@ -325,6 +329,55 @@ export default function FourColor() {
   };
   const clearAll = () => { setNodes([]); setEdges([]); setHistory([]); setStepIdx(0); };
 
+  const newRandomGraph = () => {
+    const g = createRandomGraph({
+      n: 8 + Math.floor(Math.random() * 4),
+      edgeCount: 12,
+      width: SVG_W,
+      height: SVG_H,
+      idStart: 1,
+    });
+    setNodes(g.nodes.map((n) => ({ ...n, label: String(n.id) })));
+    setEdges(g.edges.map((e, i) => ({ id: i + 1, from: e.a, to: e.b })));
+    setHistory([]);
+    setStepIdx(0);
+    setErr('');
+  };
+
+  const downloadCurrentGraph = () => {
+    if (nodes.length === 0) { setErr('Nothing to download.'); return; }
+    downloadGraphJson(
+      buildGraphPayload({
+        nodes,
+        edges,
+        width: SVG_W,
+        height: SVG_H,
+        page: 'four-color',
+      }),
+      'four-color-graph.json',
+    );
+    setErr('');
+  };
+
+  const loadGraphFromFile = (graph, errMsg) => {
+    if (errMsg || !graph) { setErr(errMsg?.message || 'Failed to load graph.'); return; }
+    setNodes(graph.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y, label: n.label ?? String(n.id) })));
+    setEdges(toFromToEdges(graph.edges, { withIds: true }));
+    setHistory([]);
+    setStepIdx(0);
+    setErr('');
+  };
+
+  const drawPlanarAsPossible = () => {
+    if (nodes.length < 2) { setErr('Need at least 2 nodes to layout.'); return; }
+    const { nodes: next } = layoutPlanarAsPossible(nodes, edges, {
+      width: SVG_W,
+      height: SVG_H,
+    });
+    setNodes(next);
+    setErr('');
+  };
+
   const run = () => {
     const { steps } = fourColorWithSteps(nodes, edges);
     setHistory(steps);
@@ -397,6 +450,13 @@ export default function FourColor() {
                 <button onClick={delEdge} className="flex-1 px-3 py-2 bg-rose-500 text-white rounded-lg hover:bg-rose-600 text-sm">− Edge</button>
               </div>
               <button onClick={clearAll} className="w-full px-3 py-2 bg-slate-500 text-white rounded-lg hover:bg-slate-600 text-sm">Clear All</button>
+              <GraphToolbar
+                className="mt-2"
+                onNewRandom={newRandomGraph}
+                onPlanarLayout={drawPlanarAsPossible}
+                onDownload={downloadCurrentGraph}
+                onLoad={loadGraphFromFile}
+              />
               {err && <div className="mt-2 text-xs text-rose-400 bg-rose-900/30 border border-rose-700 rounded p-2">⚠ {err}</div>}
               <div className="mt-2 text-xs text-slate-400">Right-click a node to delete it.</div>
             </div>

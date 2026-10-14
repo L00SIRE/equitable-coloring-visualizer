@@ -1,4 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import GraphToolbar from '../Components/GraphToolbar';
+import { createRandomGraph, edgesToFromTo } from '../canvas/randomGraph';
+import { buildGraphPayload, downloadGraphJson, toFromToEdges } from '../canvas/graphIO';
+import { layoutPlanarAsPossible } from '../canvas/planarLayout';
 
 const SVG_WIDTH = 860;
 const SVG_HEIGHT = 520;
@@ -786,37 +790,74 @@ export default function BFS() {
   };
 
   const randomizeGraph = () => {
-    const count = 10;
-    const randomNodes = [];
-
-    for (let i = 1; i <= count; i += 1) {
-      randomNodes.push({
-        id: i,
-        x: Math.round(Math.random() * (SVG_WIDTH - 160) + 80),
-        y: Math.round(Math.random() * (SVG_HEIGHT - 180) + 90),
-      });
-    }
-
-    const keys = new Set();
-    const randomEdges = [];
-    const edgeBudget = 14;
-
-    while (randomEdges.length < edgeBudget) {
-      const a = randomNodes[Math.floor(Math.random() * randomNodes.length)].id;
-      const b = randomNodes[Math.floor(Math.random() * randomNodes.length)].id;
-      if (a === b) continue;
-      const key = toEdgeKey(a, b);
-      if (keys.has(key)) continue;
-      keys.add(key);
-      randomEdges.push({ from: a, to: b });
-    }
+    const g = createRandomGraph({
+      n: 10,
+      edgeCount: 14,
+      width: SVG_WIDTH,
+      height: SVG_HEIGHT,
+      idStart: 1,
+    });
+    const randomNodes = g.nodes;
+    const randomEdges = edgesToFromTo(g.edges);
 
     setNodes(randomNodes);
     setEdges(randomEdges);
-    setSource(1);
-    setTarget(10);
+    setSource(randomNodes[0]?.id ?? '');
+    setTarget(randomNodes[randomNodes.length - 1]?.id ?? '');
     resetTraversalState();
     setMessage('Generated a random graph with guarded undirected edges.');
+  };
+
+  const downloadCurrentGraph = () => {
+    if (nodes.length === 0) {
+      setMessage('Nothing to download — add nodes first.');
+      return;
+    }
+    downloadGraphJson(
+      buildGraphPayload({
+        nodes,
+        edges,
+        width: SVG_WIDTH,
+        height: SVG_HEIGHT,
+        page: 'bfs',
+        meta: { source, target },
+      }),
+      'bfs-graph.json',
+    );
+    setMessage('Downloaded graph JSON.');
+  };
+
+  const loadGraphFromFile = (graph, err) => {
+    if (err || !graph) {
+      setMessage(err?.message || 'Failed to load graph.');
+      return;
+    }
+    setNodes(graph.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })));
+    setEdges(toFromToEdges(graph.edges));
+    const ids = graph.nodes.map((n) => n.id);
+    setSource(graph.meta?.source ?? ids[0] ?? '');
+    setTarget(graph.meta?.target ?? ids[ids.length - 1] ?? '');
+    resetTraversalState();
+    setMessage(`Loaded graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges.`);
+  };
+
+  const drawPlanarAsPossible = () => {
+    if (nodes.length < 2) {
+      setMessage('Need at least 2 nodes to layout.');
+      return;
+    }
+    const { nodes: next, crossingsBefore, crossingsAfter } = layoutPlanarAsPossible(nodes, edges, {
+      width: SVG_WIDTH,
+      height: SVG_HEIGHT,
+    });
+    setNodes(next);
+    setMessage(
+      crossingsAfter < crossingsBefore
+        ? `Planar-ish layout: crossings ${crossingsBefore} → ${crossingsAfter}.`
+        : crossingsAfter === 0
+          ? 'Planar-ish layout: crossing-free drawing.'
+          : `Planar-ish layout: ${crossingsAfter} crossing(s) remain.`,
+    );
   };
 
   const startBfs = () => {
@@ -979,9 +1020,13 @@ export default function BFS() {
                   <button className={`${buttonBase} w-full bg-indigo-600 text-white hover:bg-indigo-500`} onClick={loadExample}>
                     Load Example Graph
                   </button>
-                  <button className={`${buttonBase} w-full bg-blue-700 text-white hover:bg-blue-600`} onClick={randomizeGraph}>
-                    New Random Graph
-                  </button>
+                  <GraphToolbar
+                    className="w-full [&>button]:flex-1 [&>button]:w-full"
+                    onNewRandom={randomizeGraph}
+                    onPlanarLayout={drawPlanarAsPossible}
+                    onDownload={downloadCurrentGraph}
+                    onLoad={loadGraphFromFile}
+                  />
                 </div>
               </div>
 

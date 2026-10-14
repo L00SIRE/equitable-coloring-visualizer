@@ -5,6 +5,9 @@ import React, {
   useCallback,
   memo,
 } from "react";
+import GraphToolbar from "../Components/GraphToolbar";
+import { buildGraphPayload, downloadGraphJson, toFromToEdges } from "../canvas/graphIO";
+import { layoutPlanarAsPossible } from "../canvas/planarLayout";
 
 /* ----------------------------- Constants ----------------------------- */
 
@@ -560,6 +563,52 @@ export default function EdgeColor() {
     setError("");
   };
 
+  const downloadCurrentGraph = () => {
+    if (nodes.length === 0) {
+      setError("Nothing to download.");
+      return;
+    }
+    downloadGraphJson(
+      buildGraphPayload({
+        nodes,
+        edges,
+        width: SVG_W,
+        height: SVG_H,
+        page: "edge-color",
+      }),
+      "edge-color-graph.json"
+    );
+    setError("");
+  };
+
+  const loadGraphFromFile = (graph, err) => {
+    if (err || !graph) {
+      setError(err?.message || "Failed to load graph.");
+      return;
+    }
+    setNodes(graph.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })));
+    setEdges(
+      toFromToEdges(graph.edges, { withIds: true }).map((e, i) => ({
+        ...e,
+        id: e.id ?? i + 1,
+      }))
+    );
+    setError("");
+  };
+
+  const drawPlanarAsPossible = () => {
+    if (nodes.length < 2) {
+      setError("Need at least 2 nodes to layout.");
+      return;
+    }
+    const { nodes: next } = layoutPlanarAsPossible(nodes, edges, {
+      width: SVG_W,
+      height: SVG_H,
+    });
+    setNodes(next);
+    setError("");
+  };
+
   const loadPetersen = () => {
     const g = genPetersen();
     setNodes(g.nodes);
@@ -765,12 +814,12 @@ export default function EdgeColor() {
                 Generators
               </h2>
               <div className="space-y-2">
-                <button
-                  onClick={loadRandom}
-                  className="w-full bg-cyan-600 hover:bg-cyan-700 text-white text-sm px-3 py-1.5 rounded"
-                >
-                  Random graph
-                </button>
+                <GraphToolbar
+                  onNewRandom={loadRandom}
+                  onPlanarLayout={drawPlanarAsPossible}
+                  onDownload={downloadCurrentGraph}
+                  onLoad={loadGraphFromFile}
+                />
                 <div className="flex gap-2 items-center">
                   <label className="text-xs text-slate-400">K_n n=</label>
                   <input

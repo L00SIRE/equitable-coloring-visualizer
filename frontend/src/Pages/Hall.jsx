@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, memo } from "react";
+import GraphToolbar from "../Components/GraphToolbar";
+import { buildGraphPayload, downloadGraphJson } from "../canvas/graphIO";
 
 // ---------------- Pseudocode ----------------
 const PSEUDO = [
@@ -527,6 +529,59 @@ export default function Hall() {
     setYOffsets({});
   }
 
+  function downloadCurrentGraph() {
+    clearError();
+    if (nodesA.length + nodesB.length === 0) {
+      setError("Nothing to download.");
+      return;
+    }
+    // Embed bipartition in positions so a generic loader can still place nodes.
+    const laidOut = [
+      ...nodesA.map((n, i) => ({ id: n.id, x: 180, y: layoutY(i, nodesA.length) })),
+      ...nodesB.map((n, i) => ({ id: n.id, x: 620, y: layoutY(i, nodesB.length) })),
+    ];
+    downloadGraphJson(
+      buildGraphPayload({
+        nodes: laidOut,
+        edges,
+        width: 800,
+        height: 500,
+        page: "hall",
+        meta: {
+          nodesA: nodesA.map((n) => n.id),
+          nodesB: nodesB.map((n) => n.id),
+        },
+      }),
+      "hall-graph.json"
+    );
+  }
+
+  function loadGraphFromFile(graph, err) {
+    clearError();
+    if (err || !graph) {
+      setError(err?.message || "Failed to load graph.");
+      return;
+    }
+    const aIds = Array.isArray(graph.meta?.nodesA)
+      ? graph.meta.nodesA
+      : graph.nodes.filter((n) => String(n.id).startsWith("a")).map((n) => n.id);
+    const bIds = Array.isArray(graph.meta?.nodesB)
+      ? graph.meta.nodesB
+      : graph.nodes.filter((n) => String(n.id).startsWith("b")).map((n) => n.id);
+    // Fallback: split by x position if meta missing
+    let na = aIds.map((id) => ({ id }));
+    let nb = bIds.map((id) => ({ id }));
+    if (na.length === 0 && nb.length === 0 && graph.nodes.length) {
+      const mid = 400;
+      na = graph.nodes.filter((n) => n.x < mid).map((n) => ({ id: n.id }));
+      nb = graph.nodes.filter((n) => n.x >= mid).map((n) => ({ id: n.id }));
+    }
+    setNodesA(na);
+    setNodesB(nb);
+    setEdges(graph.edges.map((e) => ({ from: e.a, to: e.b })));
+    setYOffsets({});
+  }
+
   // ---------------- Drag (vertical only) ----------------
   const SVG_W_HALL = 800;
   const SVG_H_HALL = 500;
@@ -768,12 +823,13 @@ export default function Hall() {
                   />
                 </label>
               </div>
-              <button
-                onClick={randomGraph}
-                className="mt-2 w-full px-3 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600 text-sm"
-              >
-                Random Bipartite
-              </button>
+              <GraphToolbar
+                className="mt-2"
+                onNewRandom={randomGraph}
+                onDownload={downloadCurrentGraph}
+                onLoad={loadGraphFromFile}
+                randomLabel="New Random Graph"
+              />
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <button
                   onClick={() => loadPreset(PRESET_JOB)}

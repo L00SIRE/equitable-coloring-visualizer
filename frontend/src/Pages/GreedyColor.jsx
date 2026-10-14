@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, memo } from "react";
+import GraphToolbar from "../Components/GraphToolbar";
+import { createRandomGraph } from "../canvas/randomGraph";
+import { buildGraphPayload, downloadGraphJson, toFromToEdges } from "../canvas/graphIO";
+import { layoutPlanarAsPossible } from "../canvas/planarLayout";
 
 // 12-color palette (tailwind-inspired)
 const PALETTE = [
@@ -508,18 +512,66 @@ export default function GreedyColor() {
 
   const generateRandom = () => {
     setError("");
-    const n = 6 + Math.floor(Math.random() * 4);
-    const pts = circularLayout(n);
-    const newNodes = pts.map((p, i) => ({ id: i + 1, x: p.x, y: p.y }));
+    const g = createRandomGraph({
+      n: 6 + Math.floor(Math.random() * 4),
+      width: SVG_W,
+      height: SVG_H,
+      idStart: 1,
+      edgeCount: undefined,
+    });
+    // denser Erdős–Rényi-ish via probability overlay on shared positions
+    const n = g.nodes.length;
     const newEdges = [];
-    for (let i = 1; i <= n; i++) {
-      for (let j = i + 1; j <= n; j++) {
-        if (Math.random() < 0.4) newEdges.push({ from: i, to: j });
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        if (Math.random() < 0.4) newEdges.push({ from: g.nodes[i].id, to: g.nodes[j].id });
       }
     }
-    setNodes(newNodes);
+    setNodes(g.nodes);
     setEdges(newEdges);
     setNextId(n + 1);
+  };
+
+  const downloadCurrentGraph = () => {
+    setError("");
+    if (nodes.length === 0) {
+      setError("Nothing to download.");
+      return;
+    }
+    downloadGraphJson(
+      buildGraphPayload({
+        nodes,
+        edges,
+        width: SVG_W,
+        height: SVG_H,
+        page: "greedy-color",
+      }),
+      "greedy-color-graph.json"
+    );
+  };
+
+  const loadGraphFromFile = (graph, err) => {
+    setError("");
+    if (err || !graph) {
+      setError(err?.message || "Failed to load graph.");
+      return;
+    }
+    setNodes(graph.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })));
+    setEdges(toFromToEdges(graph.edges));
+    setNextId(graph.nodes.reduce((m, n) => Math.max(m, Number(n.id) || 0), 0) + 1);
+  };
+
+  const drawPlanarAsPossible = () => {
+    setError("");
+    if (nodes.length < 2) {
+      setError("Need at least 2 nodes to layout.");
+      return;
+    }
+    const { nodes: next } = layoutPlanarAsPossible(nodes, edges, {
+      width: SVG_W,
+      height: SVG_H,
+    });
+    setNodes(next);
   };
 
   const generateKn = () => {
@@ -767,10 +819,14 @@ export default function GreedyColor() {
                 <Btn onClick={clearGraph} variant="slate">
                   Clear
                 </Btn>
-                <Btn onClick={generateRandom} variant="indigo">
-                  Random
-                </Btn>
               </div>
+              <GraphToolbar
+                className="mt-2"
+                onNewRandom={generateRandom}
+                onPlanarLayout={drawPlanarAsPossible}
+                onDownload={downloadCurrentGraph}
+                onLoad={loadGraphFromFile}
+              />
             </div>
 
             {/* Generators */}

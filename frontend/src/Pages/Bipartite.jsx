@@ -2,8 +2,12 @@ import React, {
   useState,
   useEffect,
   useRef,
+  useCallback,
   memo,
 } from "react";
+import GraphToolbar from "../Components/GraphToolbar";
+import { buildGraphPayload, downloadGraphJson, toFromToEdges } from "../canvas/graphIO";
+import { layoutPlanarAsPossible } from "../canvas/planarLayout";
 
 // ---------- constants ----------
 const SVG_W = 800;
@@ -451,6 +455,40 @@ export default function Bipartite() {
     setStartNode(labels[0]);
   };
 
+  const downloadCurrentGraph = () => {
+    clearErr();
+    if (nodes.length === 0) return setErr("Nothing to download.");
+    downloadGraphJson(
+      buildGraphPayload({
+        nodes,
+        edges,
+        width: SVG_W,
+        height: SVG_H,
+        page: "bipartite",
+        meta: { startNode },
+      }),
+      "bipartite-graph.json"
+    );
+  };
+
+  const loadGraphFromFile = (graph, err) => {
+    clearErr();
+    if (err || !graph) return setErr(err?.message || "Failed to load graph.");
+    setNodes(graph.nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })));
+    setEdges(toFromToEdges(graph.edges));
+    setStartNode(graph.meta?.startNode ?? graph.nodes[0]?.id ?? "");
+  };
+
+  const drawPlanarAsPossible = () => {
+    clearErr();
+    if (nodes.length < 2) return setErr("Need at least 2 nodes to layout.");
+    const { nodes: next } = layoutPlanarAsPossible(nodes, edges, {
+      width: SVG_W,
+      height: SVG_H,
+    });
+    setNodes(next);
+  };
+
   const genBipartite = () => {
     clearErr();
     const m = Math.max(1, Math.min(10, Number(biM) || 3));
@@ -517,36 +555,6 @@ export default function Bipartite() {
     };
   };
 
-  const onMouseDown = (e, id) => {
-    e.preventDefault();
-    const p = getSvgPoint(e);
-    if (!p) return;
-    drag.current = { id, dx: 0, dy: 0, startX: p.x, startY: p.y };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    window.addEventListener("touchmove", onMouseMove, { passive: false });
-    window.addEventListener("touchend", onMouseUp);
-    window.addEventListener("touchcancel", onMouseUp);
-  };
-
-  const onMouseMove = (e) => {
-    if (!drag.current) return;
-    if (e.touches) e.preventDefault();
-    const p = getSvgPoint(e);
-    if (!p) return;
-    const id = drag.current.id;
-    setNodesPositional(id, p.x, p.y);
-  };
-
-  const onMouseUp = () => {
-    drag.current = null;
-    window.removeEventListener("mousemove", onMouseMove);
-    window.removeEventListener("mouseup", onMouseUp);
-    window.removeEventListener("touchmove", onMouseMove);
-    window.removeEventListener("touchend", onMouseUp);
-    window.removeEventListener("touchcancel", onMouseUp);
-  };
-
   const liveNodesRef = useRef(nodes);
   liveNodesRef.current = nodes;
 
@@ -563,6 +571,39 @@ export default function Bipartite() {
     liveNodesRef.current = next;
     setNodes(next);
   }
+
+  // Stable window listeners (refs) so unmount can always detach the same fns
+  // that were attached during a mid-gesture route change.
+  const dragMove = useCallback((e) => {
+    if (!drag.current) return;
+    if (e.touches) e.preventDefault();
+    const p = getSvgPoint(e);
+    if (!p) return;
+    setNodesPositional(drag.current.id, p.x, p.y);
+  }, []);
+
+  const dragUp = useCallback(() => {
+    drag.current = null;
+    window.removeEventListener("mousemove", dragMove);
+    window.removeEventListener("mouseup", dragUp);
+    window.removeEventListener("touchmove", dragMove);
+    window.removeEventListener("touchend", dragUp);
+    window.removeEventListener("touchcancel", dragUp);
+  }, [dragMove]);
+
+  const onMouseDown = (e, id) => {
+    e.preventDefault();
+    const p = getSvgPoint(e);
+    if (!p) return;
+    drag.current = { id, dx: 0, dy: 0, startX: p.x, startY: p.y };
+    window.addEventListener("mousemove", dragMove);
+    window.addEventListener("mouseup", dragUp);
+    window.addEventListener("touchmove", dragMove, { passive: false });
+    window.addEventListener("touchend", dragUp);
+    window.addEventListener("touchcancel", dragUp);
+  };
+
+  useEffect(() => () => dragUp(), [dragUp]);
 
   // ---------- partition layout ----------
   const partitionCoords = React.useMemo(() => {
@@ -805,9 +846,17 @@ export default function Bipartite() {
             <div className="bg-slate-900 rounded-xl border border-slate-800 p-4">
               <h2 className="font-semibold text-slate-100 mb-3">Generate</h2>
 
+              <GraphToolbar
+                className="mb-3"
+                onNewRandom={genRandom}
+                onPlanarLayout={drawPlanarAsPossible}
+                onDownload={downloadCurrentGraph}
+                onLoad={loadGraphFromFile}
+              />
+
               <div className="mb-3">
                 <label className="block text-xs text-slate-400 mb-1">
-                  Random graph
+                  Random graph size (n, e)
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -824,12 +873,6 @@ export default function Bipartite() {
                     placeholder="e"
                     className="w-16 px-2 py-1.5 text-sm border border-slate-600 rounded-md"
                   />
-                  <button
-                    onClick={genRandom}
-                    className="flex-1 px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm"
-                  >
-                    Random
-                  </button>
                 </div>
               </div>
 
