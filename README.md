@@ -1,6 +1,6 @@
 # Equitable Coloring Visualizer
 
-**Live:** https://graph-theory-visualizer.vercel.app
+**Live:** https://graph-theory-visualizer-self.vercel.app/
 
 An interactive graph theory lab. You draw a graph on the canvas, pick an algorithm, and step through what it does to the graph one state change at a time.
 
