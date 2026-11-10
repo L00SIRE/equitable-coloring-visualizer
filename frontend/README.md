@@ -2,6 +2,8 @@
 
 **Suman Dangal\*** · **Saharsha Pandey** · **Chhandak Roy '24**
 
+Advisor: Dr. Tyler Markenen
+
 ## The Abstract
 
 Graph theory fundamentally deals with dynamic, evolving structures, yet we
@@ -29,30 +31,114 @@ active approach fosters a more collaborative and inclusive learning
 environment. This helps to access advanced discrete mathematics allowing
 students to see algorithmic state: step-by-step.
 
-## Pages
+## How the site is organized
 
-- `/` — landing page with project abstract and module launch cards
-- `/bfs` — Breadth-First Search visualizer
-- `/dfs` — Depth-First Search visualizer
-- `/bipartite` — bipartite detection via live 2-coloring
-- `/greedy-color` — greedy vertex coloring (Brooks context)
-- `/edge-color` — edge coloring (Vizing's theorem)
-- `/four-color` — Four Color Theorem on planar graphs
-- `/hall` — Hall's Marriage Theorem via augmenting paths
-- `/hs-algo` — Kierstead–Kostochka algorithm (Hajnal–Szemerédi)
+There is no landing page. The site opens directly on a working tool, and every
+page has the same layout: a **sidebar** to switch algorithms, a **canvas** in
+the middle where you build the graph, and an **inspector** on the right with
+the setup, the explanation of the current step, the algorithm's state and its
+pseudocode. On a phone the sidebar becomes a menu and the inspector sits below
+the canvas.
+
+| Route | Page | What it shows |
+| --- | --- | --- |
+| `/bfs` | Breadth-first search | levels, queue, shortest path to a target |
+| `/dfs` | Depth-first search | discovery/finish times, tree/back/forward/cross edges, cycles, topological order |
+| `/bipartite` | Bipartite test | BFS 2-coloring, and an actual odd cycle when it fails |
+| `/hall` | Matching and Hall's theorem | augmenting paths, and a Hall violator when no perfect matching exists |
+| `/greedy-color` | Greedy vertex coloring | five vertex orders, plus exact χ(G), clique and Brooks bounds |
+| `/edge-color` | Edge coloring (Vizing) | the Misra–Gries algorithm: fans, path flips, at most Δ + 1 colors |
+| `/four-color` | Four colors | exact DSATUR search with backtracking on maps and planar graphs |
+| `/hs-algo` | Equitable coloring (H–S) | the Kierstead–Kostochka algorithm, see below |
+
+Light and dark themes are available from the sidebar (it follows your system
+setting at first).
+
+## Working with the canvas
+
+The canvas is an unbounded plane. Scrolling zooms around the cursor and does
+not scroll the page; **Fit** (or `F`) brings the whole graph back into view.
+
+| Tool | Key | What it does |
+| --- | --- | --- |
+| Select | `V` | click or drag vertices; click an edge; drag empty space to box-select (shift adds); `Delete` removes |
+| Vertex | `N` | click empty space to place a vertex |
+| Edge | `E` | drag from one vertex to another, or click one and then the other; `Esc` cancels |
+| Hand | `H` | drag to move the view (on a touch screen, dragging empty space pans and two fingers pinch to zoom) |
+
+`Ctrl/Cmd+Z` and `Ctrl/Cmd+Shift+Z` undo and redo every edit (a drag counts as
+one step), and `Ctrl/Cmd+A` selects all.
+
+The **Graph** menu on the canvas holds everything else:
+
+- **Examples** curated for the page you are on;
+- **Generate** graph families (paths, cycles, complete and complete bipartite
+  graphs, grids, wheels, crown graphs, Petersen, random trees, G(n, p), random
+  graphs with Δ ≤ r and random bipartite graphs);
+- **Layout**: circle, two columns (bipartite pages) or **Untangle**, a
+  force-directed layout that pushes crossing edges apart. It reduces crossings
+  but is not a planarity test;
+- **Directed edges** on the traversal pages;
+- an **edge list** box (`0-1, 1-2, 2-0`) to type a graph in or copy one out;
+- **Export / Import** as JSON (older files with `from`/`to` edges still load).
+
+### Running an algorithm
+
+**Run** computes every step of the algorithm for the current graph and loads it
+into the player below the canvas. While a run is loaded the structure is
+frozen (you can still drag vertices and move the view); **Stop** or **Edit
+graph** goes back to editing, and loading another graph ends the run.
+
+- Play / pause (`Space`), previous / next (`←` / `→`), first / last
+  (`Home` / `End`), a scrubber and a speed control from 0.5× to 8×.
+- The inspector shows what the current step does and which line of the
+  pseudocode it is, a legend for the colors on the canvas, and the algorithm's
+  state (queue, stack, color counts, matching, auxiliary digraph …).
+- Changing a setting while a run is loaded recomputes it.
+
+## The algorithms
+
+Each algorithm lives in `src/algorithms/` as a pure function that returns a
+list of steps; the page decides how a step is drawn. Where the old pages
+simplified or over-claimed, we replaced them:
+
+- **Bipartite test** previously reported only the bad edge. It now returns the
+  odd cycle: the two BFS-tree paths from the ends of the bad edge, up to their
+  lowest common ancestor.
+- **Edge coloring** was a greedy coloring labelled "Vizing", which can use up
+  to 2Δ − 1 colors. It is now **Misra–Gries**, the constructive proof of
+  Vizing's theorem. When no color is free at both ends of an edge (u, v), it
+  builds a fan of u, flips the cd-path starting at u to free a color, rotates
+  the fan, and so always stays within Δ + 1 colors. The page also decides
+  exactly whether the graph is class 1 (χ′ = Δ) or class 2 (χ′ = Δ + 1), for
+  up to 36 edges, by searching for a Δ-coloring of the line graph.
+- **Four colors** now uses an exact DSATUR search with backtracking (the old
+  heuristic could fail on planar graphs). It does not reproduce the
+  computer-assisted proof of the theorem; if every branch fails for k = 4 the
+  graph is not planar. Euler's bound |E| ≤ 3|V| − 6 is shown as a quick check.
+- **Greedy coloring** offers vertex number, largest-first, smallest-last,
+  DSATUR and random orders, and compares the result with the exact χ(G), the
+  clique number, Δ + 1, degeneracy + 1 and Brooks' theorem. The default example
+  is a crown graph, where numeric order uses as many colors as there are pairs
+  although χ = 2.
+- **DFS** classifies edges as tree, back, forward or cross, restarts to build a
+  full DFS forest, detects cycles, and gives a topological order for DAGs.
+- **Hall's theorem** runs Kuhn's augmenting-path matching and, if some vertex of
+  A stays unmatched, returns the set S of vertices reachable by alternating
+  paths: a Hall violator with |N(S)| < |S|.
 
 ## H-S Algorithm Simulator
 
-The H-S page (`src/Pages/HSAlgo.jsx`) animates the Kierstead–Kostochka
-algorithm that proves the Hajnal–Szemerédi theorem: every graph with maximum
-degree Δ(G) ≤ r has an **equitable (r+1)-coloring**, meaning a proper coloring
-whose color classes differ in size by at most one.
+The H-S page animates the Kierstead–Kostochka algorithm that proves the
+Hajnal–Szemerédi theorem: every graph with maximum degree Δ(G) ≤ r has an
+**equitable (r+1)-coloring**, meaning a proper coloring whose color classes
+differ in size by at most one. Δ(G) is the largest number of edges meeting at
+one vertex.
 
-The algorithm itself lives in `src/algorithms/hajnalSzemeredi.js`. It is a pure
-module with no React in it: it takes the vertices, edges and `r` and returns
-every intermediate snapshot (coloring, highlighted vertices and edges, the
-auxiliary digraph, and a message citing the paper), and the page plays those
-snapshots back. It is covered by `src/algorithms/hajnalSzemeredi.test.js`.
+The algorithm itself is `src/algorithms/hajnalSzemeredi.js`. It is a pure
+module: it takes the vertices, edges and `r` and returns every snapshot
+(coloring, highlighted vertices and edges, the auxiliary digraph, and a message
+citing the paper). `src/algos/hs.jsx` draws those snapshots.
 
 ### Why we rewrote it
 
@@ -70,8 +156,7 @@ the same graph now finishes in **8 steps**.
 **Setup.** Let k = r + 1 and s = n / k. If n is not a multiple of k, we add p
 padding vertices that form a clique K_p, exactly as in the proof of
 Theorem 2.4. K_p never pushes a degree above r, and the padding vertices are
-dropped at the end. They appear in the bottom-right corner of the canvas
-during playback.
+dropped at the end. They are drawn below the graph during playback.
 
 **Algorithm P (Theorem 3.2).**
 
@@ -118,7 +203,7 @@ touches v_i, and it matches the edge order of the paper graph in our notes.
 Each Case 2 lowers q, so P′ stops after at most r rounds. The finished coloring
 is checked (proper on G, class sizes within one of each other). If any
 invariant from the proof ever failed, the run would end with an explicit
-**Error** step instead of improvising.
+error instead of improvising.
 
 **Choices inside Lemma 2.3.** Lemma 2.3 often allows several (z, y₁, X)
 choices. With **Shortest route** on (the default), we take the one with the
@@ -128,8 +213,8 @@ Case 2 and the recursive call.
 
 ### Sample graphs
 
-- **Sample Graph 1** (the graph from our notes, previously "Paper Graph"):
-  16 vertices, 22 edges, Δ = 3, k = 4.
+- **Sample Graph 1** (the graph from our notes): 16 vertices, 22 edges, Δ = 3,
+  k = 4.
   - Stages 2–15 add no improper edge.
   - Stage 16 adds {9,15}, {11,15} and {14,15}; {11,15} is improper, so 15
     moves to Red, giving V+ = Red (5 vertices) and V− = Yellow (3 vertices).
@@ -150,69 +235,110 @@ Case 2 and the recursive call.
 - **Petersen** (10 vertices, r = 3, so padding K₂ is added), **Cycle C₈** and
   **K₃,₃**.
 
-### Using the page
+### On the H-S page
 
-- **Compute Steps** runs the algorithm on the current graph. **Recompute**
-  re-runs it, and changing either option re-runs it automatically.
-- **Play / Pause**, **◀ / ▶** (or the ← / → keys), **▶▶** (last step),
-  **Reset** and a speed slider control playback.
-- A **step timeline** lists every step as a chip colored by step type. Click a
-  chip to jump to it; dashed chips are steps inside a recursive call.
+- **r** is the degree bound. It is raised automatically to Δ(G) if the graph
+  needs it, and k = r + 1 colors are used.
+- **Merge quiet stages** folds consecutive stages that create no improper edge
+  into one step. **Shortest route** is described above.
+- **All steps** lists every step as a chip. Click one to jump to it.
 - Each step shows a badge, the part of the paper it comes from (for example
   `Lemma 2.3` or `Thm 2.4, Case 2`), and which level of the algorithm it
   belongs to: P, P′, or P′ on G[B − y₁].
-- **Merge quiet stages** folds consecutive stages that create no improper edge
-  into one step. **Shortest route** is described above.
-- The **Color Classes** banner shows each class size, plus tags for its role in
-  the current step: V+, V−, A, B, A′, U, W, X and Y.
-- The **Auxiliary Digraph H(G, f)** panel sits next to the graph. It shows arc
-  directions, class sizes, V+ (blue ring), V− (amber ring), the accessible
-  classes (dashed green ring) and the path being used (violet). Classes outside
-  the current sub-problem are faded.
-- On the canvas:
-  - edges added in the current step are green, and an improper edge is red;
-  - moved vertices pulse green;
-  - z, y₁ and y₂ are labelled in amber;
-  - a vertex set aside for the recursive call is drawn dashed.
-- **How the algorithm works** is a collapsible summary of the proof on the page
-  itself, with a link to the paper.
+- The **State** panel shows each color class with its size and its role in the
+  current step (V+, V−, A, B, A′, U, W, X, Y) and the auxiliary digraph H(G, f)
+  with V+ (blue ring), V− (amber ring), the accessible classes (dashed green
+  ring) and the path being used (violet).
+- On the canvas, edges added in the current step are green, an improper edge
+  is red, moved vertices are ringed in green, z, y₁ and y₂ are labelled, a
+  vertex set aside for the recursive call is dashed, and edges that have not
+  been added yet are drawn faintly.
 
-Graph editing is unchanged: presets, New Random Graph, Draw As Planar As
-Possible, Download/Load JSON, bulk vertices, bulk edges (`0-1, 1-2, …`) with
-the degree cap enforced, Connect Mode, shift-click/marquee selection and
-delete, mod-k and greedy colorings, and zoom and pan.
+## Project layout
 
-### Tests
-
-```bash
-npm test -- --watchAll=false src/algorithms
+```
+src/
+  algorithms/   pure algorithm modules (no React) and their tests
+  graph/        graph model, generators, layouts, JSON / edge-list IO, sample graphs
+  editor/       the canvas, the editing hook (undo, selection, tools), the Graph menu
+  ui/           app shell, workbench layout, player bar, shared panels
+  algos/        one file per page: parameters, how a step is drawn, explanation
+  theme/        colors and the categorical palette
 ```
 
-The suite checks:
+A page is a plain object: `compute(graph, params)` calls an algorithm,
+`visualize(step, graph, params)` returns how each vertex and edge looks, and
+`Params`, `Panels`, `Result` and `About` are small components. Adding an
+algorithm means writing that object and adding it to `src/algos/registry.js`.
 
-- the exact step sequence for Sample Graph 1;
-- Case 2 and the recursive call on Sample Graph 2;
-- padding;
-- 400 random graphs;
-- algorithm P′ on 1,500 constructed "V+ blocked" colorings, in both choice
-  modes, so Case 1, Case 2 and the recursion are all exercised.
+## Tests
 
-Every run must end proper and equitable.
+```bash
+npm test -- --watchAll=false
+```
+
+- **Algorithms:** BFS distances against an independent computation; DFS
+  intervals properly nested and topological orders valid on random DAGs; the
+  bipartite verdict against an independent test with a checked witness; greedy
+  colorings proper and within the Δ + 1 and degeneracy + 1 bounds; Misra–Gries
+  proper and within Δ + 1 colors on 1,500 random graphs, with the fan and
+  inversion path exercised; the four-color search on planar and non-planar
+  graphs; Hall matching sizes against brute force; and the H-S algorithm on both
+  sample graphs, padding, random graphs and 1,500 constructed "V+ blocked"
+  colorings so that Case 1, Case 2 and the recursion all run.
+- **Pages:** every example graph on every page is run and every step is drawn,
+  and each step's visuals may only refer to vertices and edges that exist.
+- **Editor:** undo/redo, edge rules, deletion, drag as one undo step.
+- **App:** `/` opens a tool, every algorithm is in the sidebar, and
+  Run / keyboard stepping / Stop work.
 
 ## Reference
 
 - H. A. Kierstead & A. V. Kostochka, *A Short Proof of the
   Hajnal–Szemerédi Theorem on Equitable Colouring*, Combinatorics, Probability
   and Computing 17 (2008), 265–270.
+  <https://doi.org/10.1017/S0963548307008619>
+- J. Misra & D. Gries, *A constructive proof of Vizing's theorem*,
+  Information Processing Letters 41 (1992), 131–133.
 
 ## Getting started
 
+You need Node.js (with npm) and, for the Python option, Python 3. The commands
+below assume you start in the folder you cloned (the one that contains
+`frontend/`).
+
+### Option 1: development server (hot reload)
+
 ```bash
+cd frontend
 npm install
 npm start
 ```
 
-Open <http://localhost:3000> and navigate to `/hs-algo`.
+Open <http://localhost:3000>. It opens straight into the breadth-first search
+tool.
+
+### Option 2: build once, serve with Python
+
+```bash
+cd frontend
+npm install
+npm run build
+cd build
+python3 -m http.server 8000
+```
+
+Open <http://localhost:8000>. Stop the server with `Ctrl+C`.
+
+Notes for the Python option:
+
+- Run `npm run build` first. The `frontend/build/` folder that is checked in
+  may be an old version of the site.
+- Always serve from the `build` folder and open the root address. Python's
+  server does not know about the site's page routes, so reloading the browser
+  on an address like `/dfs` gives a 404. Open `/` again and use the sidebar.
+- If port 8000 is busy, use another one, for example
+  `python3 -m http.server 8080`.
 
 ## Available Scripts
 
@@ -221,25 +347,21 @@ Open <http://localhost:3000> and navigate to `/hs-algo`.
 - `npm run build` — production build
 
 ## Notes / To-Do's:
-Superficial To Do's:
-On H-S Page:
-- [x] Include a link to the K-K paper.
-- [x] Say what Delta(G) means.
-- [x] Say (in the "Parameters" box) r = Delta and k = *r + 1* = 4 (or whatever number r + 1 is in the current context).
-- [x] Replace "conflict" with "improper edge."
-- [x] Make "Color Classes" as a horizontal/banner box so that the "Auxiliary Digraph" box can be directly next to the "Graph G" box.
-- [ ] "Light mode" option?
 
-Feature To Do's:
-- [ ] "Select multiple vertices" feature?
-- [ ] "Save/Download/Load Graph" feature?
-- [ ] Include the "New Random Graph" button on the H-S page (and all the other applicable pages).
-- [ ] Canvas is still limited
-- [ ] "Double-click to add vertex" seems glitchy.
-- [ ] Fix "scroll to zoom" feature -- scrolling currently both zooms *and* scrolls.
-- [ ] Design a "Draw As Planar As Possible" feature.
+Done:
+- [x] Link to the K-K paper, what Δ(G) means, r = Δ and k = r + 1 shown, "improper edge" wording on the H-S page.
+- [x] Light mode.
+- [x] Select multiple vertices (shift-click and box select), delete, undo and redo.
+- [x] Save / download / load a graph (JSON export and import, and edge-list text).
+- [x] "New random graph" on every page: the **Generate** section of the Graph menu.
+- [x] Canvas is no longer limited: it is an unbounded plane with zoom about the cursor.
+- [x] "Double-click to add a vertex" was glitchy: replaced by the Vertex tool.
+- [x] Scroll to zoom no longer scrolls the page.
+- [x] "Draw as planar as possible": **Untangle** layout (it reduces crossings; it does not test planarity).
+- [x] The paper graph ("Sample Graph 1") now works: see "Why we rewrote it".
+- [x] Remove the landing page; the site opens on a tool.
 
-Algorithm To Do's:
-- [x] Doesn't seem to work on "Paper Graph" (Let's call it "Sample Graph 1"). Fixed: V+ is blocked at the
-  last stage of that graph, which needs Lemma 2.3 and Case 1 of Theorem 2.4. Those are now implemented
-  (see "Why we rewrote it" above), and the run takes 8 steps.
+Still open:
+- [ ] A real planarity test for the four-color page (Euler's bound is only a necessary condition).
+- [ ] Weighted graphs and shortest-path algorithms (Dijkstra, Bellman–Ford).
+- [ ] Share a graph by link.

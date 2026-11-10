@@ -4,13 +4,8 @@
     <meta charset="utf-8" />
     <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#3B82F6" />
-    <meta
-      name="description"
-      content="Interactive Graph Theory Visualizer - Explore BFS algorithms, shortest path finding, and graph coloring with an intuitive visual interface"
-    />
-    <meta name="keywords" content="graph theory, visualization, BFS, algorithms, shortest path, graph coloring, interactive learning" />
-    <meta name="author" content="Graph Theory Visualizer" />
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="description" content="Build a graph, run a graph algorithm on it and step through every decision: BFS, DFS, bipartite testing, matching, coloring and equitable coloring." />
     <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
     <!--
       manifest.json provides metadata used when your web app is installed on a
@@ -26,7 +21,16 @@
       work correctly both with client-side routing and a non-root public URL.
       Learn how to configure a non-root public URL by running `npm run build`.
     -->
-    <title>Graph Theory Visualizer - Interactive Algorithm Learning</title>
+    <title>Graph Theory Visualizer</title>
+      <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('gtv-theme');
+          var dark = saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+      })();
+    </script>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>

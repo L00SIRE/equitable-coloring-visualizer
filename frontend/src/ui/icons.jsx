@@ -1,0 +1,30 @@
+import React from 'react';
+
+const base = { width: 16, height: 16, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true };
+const make = (children) => function Icon(props) { return <svg {...base} {...props}>{children}</svg>; };
+
+export const Cursor = make(<path d="M3.5 2.5l8 4-3.6 1.2-1.2 3.6z" />);
+export const Vertex = make(<><circle cx="7" cy="9" r="4" /><path d="M12.5 2v4M10.5 4h4" /></>);
+export const Edge = make(<><circle cx="3.5" cy="12.5" r="1.8" /><circle cx="12.5" cy="3.5" r="1.8" /><path d="M5 11l6-6" /></>);
+export const Hand = make(<path d="M5.5 8V3.8a1 1 0 012 0V7m0-3.6a1 1 0 012 0V7m0-2.6a1 1 0 012 0V9m0-3.2a1 1 0 012 0V10c0 2.5-1.6 4-4 4h-1c-1.6 0-2.5-.7-3.5-2L2.6 9.4a1 1 0 011.6-1.2L5.5 10" />);
+export const Undo = make(<path d="M5 3L2 6l3 3M2.5 6H10a3.5 3.5 0 010 7H6" />);
+export const Redo = make(<path d="M11 3l3 3-3 3M13.5 6H6a3.5 3.5 0 000 7h4" />);
+export const Trash = make(<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M6.8 7v4M9.2 7v4" />);
+export const Play = make(<path d="M5 3l8 5-8 5z" fill="currentColor" />);
+export const Pause = make(<path d="M5 3.5v9M11 3.5v9" strokeWidth="2.2" />);
+export const StepBack = make(<path d="M11 3L5 8l6 5M3.5 3v10" />);
+export const StepNext = make(<path d="M5 3l6 5-6 5M12.5 3v10" />);
+export const ToStart = make(<path d="M12 3L6 8l6 5M3.5 3v10" />);
+export const ToEnd = make(<path d="M4 3l6 5-6 5M12.5 3v10" />);
+export const Fit = make(<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" />);
+export const Plus = make(<path d="M8 3v10M3 8h10" />);
+export const Minus = make(<path d="M3 8h10" />);
+export const Menu = make(<path d="M2.5 4h11M2.5 8h11M2.5 12h11" />);
+export const Close = make(<path d="M3.5 3.5l9 9M12.5 3.5l-9 9" />);
+export const Sun = make(<><circle cx="8" cy="8" r="2.8" /><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" /></>);
+export const Moon = make(<path d="M13 9.5A5.5 5.5 0 016.5 3a5.5 5.5 0 106.5 6.5z" />);
+export const Chevron = make(<path d="M4 6l4 4 4-4" />);
+export const Download = make(<path d="M8 2.5v7.5M4.8 7.2L8 10.4l3.2-3.2M3 13h10" />);
+export const Upload = make(<path d="M8 10.5V3M4.8 5.8L8 2.6l3.2 3.2M3 13h10" />);
+export const Graph = make(<><circle cx="3.5" cy="4" r="1.6" /><circle cx="12.5" cy="4" r="1.6" /><circle cx="8" cy="12.5" r="1.6" /><path d="M5 4h6M4.3 5.4l2.9 5.8M11.7 5.4L8.8 11.2" /></>);
+export const External = make(<path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9v4H3V4h4" />);

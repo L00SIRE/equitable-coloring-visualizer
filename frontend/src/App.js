@@ -1,31 +1,19 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import Navbar from './Components/NavBar';
-import Home from './Pages/Home';
-import BFS from './Pages/BFS';
-import DFS from './Pages/DFS';
-import Bipartite from './Pages/Bipartite';
-import GreedyColor from './Pages/GreedyColor';
-import EdgeColor from './Pages/EdgeColor';
-import FourColor from './Pages/FourColor';
-import Hall from './Pages/Hall';
-import HSAlgo from './Pages/HSAlgo';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import Shell from './ui/Shell';
+import Workbench from './ui/Workbench';
+import { ALGORITHMS } from './algos/registry';
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Navbar />
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/bfs" element={<BFS />} />
-        <Route path="/dfs" element={<DFS />} />
-        <Route path="/bipartite" element={<Bipartite />} />
-        <Route path="/greedy-color" element={<GreedyColor />} />
-        <Route path="/edge-color" element={<EdgeColor />} />
-        <Route path="/four-color" element={<FourColor />} />
-        <Route path="/hall" element={<Hall />} />
-        <Route path="/hs-algo" element={<HSAlgo />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route element={<Shell />}>
+          {ALGORITHMS.map(({ path, algo }) => (
+            <Route key={path} path={path} element={<Workbench key={algo.id} algo={algo} />} />
+          ))}
+          <Route path="*" element={<Navigate to={ALGORITHMS[0].path} replace />} />
+        </Route>
       </Routes>
     </BrowserRouter>
   );
